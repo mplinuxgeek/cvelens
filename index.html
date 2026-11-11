@@ -6,6 +6,7 @@
 <title>CVE Lens</title>
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src https://services.nvd.nist.gov https://cveawg.mitre.org https://api.first.org https://access.redhat.com https://api.osv.dev https://raw.githubusercontent.com; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Ccircle cx='13.5' cy='13.5' r='7.5' fill='none' stroke='%23fff' stroke-width='3.2'/%3E%3Cpath d='M19 19l6.5 6.5' stroke='%23fff' stroke-width='3.8' stroke-linecap='round'/%3E%3Ccircle cx='13.5' cy='13.5' r='2.8' fill='%23f97316'/%3E%3C/svg%3E">
 <style>
 :root {
   --bg: #f6f7f9; --card: #fff; --fg: #1b1f24; --mute: #5b6470; --line: #e2e5ea; --accent: #2563eb;
@@ -98,6 +99,13 @@ button.ghost { margin-left: auto; padding: 6px 12px; font-size: 13px; background
 button.ghost:hover { border-color: var(--accent); }
 .caution { border-left: 3px solid var(--high); padding: 4px 10px; margin: 0 0 10px; font-size: 13px; }
 .print-only { display: none; }
+.copyable { cursor: pointer; }
+.title h2.copyable:hover { color: var(--accent); }
+.stat.copyable:hover { outline: 2px solid color-mix(in srgb, var(--tc, var(--accent)) 50%, transparent); outline-offset: 1px; }
+.stat.copied, h2.copied { outline: 2px solid var(--ok) !important; outline-offset: 1px; }
+#toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); opacity: 0; pointer-events: none;
+  background: var(--fg); color: var(--bg); padding: 7px 14px; border-radius: 999px; font-size: 13px; transition: opacity .15s, transform .15s; }
+#toast.show { opacity: 1; transform: translateX(-50%); }
 /* PDF export: the browser's print dialog ("Save as PDF"), always light, colours kept */
 @page { margin: 12mm; }
 @media print {
@@ -106,7 +114,7 @@ button.ghost:hover { border-color: var(--accent); }
   body { font-size: 11px; }
   .wrap { max-width: none; padding: 0; }
   header { padding: 0 0 6px; }
-  header form, #hint, .filter, #pdf, footer, .sources, details > summary, .poc details { display: none; }
+  header form, #hint, .filter, #pdf, #toast, footer, .sources, details > summary, .poc details { display: none; }
   .print-only { display: block; }
   .card { padding: 10px 12px; margin-bottom: 8px; }
   .card.keep, .stat, tr { break-inside: avoid; }
@@ -133,6 +141,7 @@ button.ghost:hover { border-color: var(--accent); }
     <div class="print-only meta" id="printmeta"></div>
   </header>
   <main id="out"></main>
+  <div id="toast" role="status" aria-live="polite"></div>
   <footer>Your browser queries the public sources directly; only the CVE id is sent to them. The KEV catalog (CISA's GitHub copy) is kept in this browser for 12 hours. Ubuntu, Debian, Alpine and GitHub advisory data come from OSV. No server, no tracking.</footer>
 </div>
 <script>
@@ -419,7 +428,7 @@ function render(d) {
   afterRender.length = 0
   const h = []
   const best = pickCvss(nvd, org, rh)
-  h.push(`<section class="card"><div class="title"><h2>${esc(d.id)}</h2>
+  h.push(`<section class="card"><div class="title"><h2 class="copyable" data-copy="${esc(d.id)}" title="Click to copy">${esc(d.id)}</h2>
     ${best ? chip(best.score, best.severity) : ''}
     ${kev?.listed ? '<span class="chip" style="background:var(--kev)">⚠ KEV · exploited</span>' : ''}
     ${org?.state ? `<span class="pill">${esc(org.state)}</span>` : ''}${nvd?.status ? `<span class="pill">NVD: ${esc(nvd.status)}</span>` : ''}
@@ -442,7 +451,7 @@ function render(d) {
   const lvlEpss = (x) => x == null ? null : x >= 0.5 ? 6 : x >= 0.2 ? 5 : x >= 0.05 ? 4 : x >= 0.01 ? 3 : x >= 0.001 ? 2 : 1
   const lvlWord = (w) => ({ critical: 6, important: 5, high: 5, moderate: 3, medium: 3, low: 1, negligible: 0 })[(w || '').toLowerCase()] ?? null
   const lvlSsvc = (v) => !v ? null : v.Exploitation === 'active' ? 6 : v.Exploitation === 'poc' ? 4 : v.Automatable === 'yes' ? 3 : 1
-  const tile = (lvl) => `stat${lvl == null ? '' : ' t' + lvl}`
+  const tile = (lvl) => `stat copyable${lvl == null ? '' : ' t' + lvl}" title="Click to copy`
   cards.push(`<div class="${tile(lvlScore(best?.score))}"><div class="lbl">CVSS ${best ? esc(best.version) : ''}</div><div class="val">${chip(best?.score, best?.severity)}${best ? `<span style="font-size:13px">${esc(best.severity || band(best.score))}</span>` : ''}</div>
     <div class="sub">${best ? `${esc(best.source || '')}<br><code>${esc(best.vector || '')}</code>` : 'not scored yet'}</div></div>`)
   cards.push(`<div class="${tile(lvlEpss(ep?.epss))}"><div class="lbl">EPSS (exploit in next 30 days)</div><div class="val">${ep ? pct(ep.epss) : '<span class="empty">n/a</span>'}</div>
@@ -540,6 +549,43 @@ function render(d) {
   afterRender.forEach((f) => f())
   $('#pdf')?.addEventListener('click', () => print())
 }
+
+// click to copy: the CVE id, and a score tile as one line ("CVSS 3.1: 10.0 · CRITICAL · nvd@nist.gov · CVSS:3.1/...")
+let toastTimer
+function toast(msg) {
+  const t = $('#toast')
+  t.textContent = msg
+  t.classList.add('show')
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => t.classList.remove('show'), 1600)
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true } catch {}
+  const ta = Object.assign(document.createElement('textarea'), { value: text }) // fallback for non-secure contexts
+  ta.style.cssText = 'position:fixed;opacity:0'
+  document.body.append(ta)
+  ta.select()
+  let ok = false
+  try { ok = document.execCommand('copy') } catch {}
+  ta.remove()
+  return ok
+}
+$('#out').addEventListener('click', async (e) => {
+  const el = e.target.closest('.copyable')
+  if (!el || e.target.closest('a, button, input, select') || String(getSelection())) return // leave links and text selection alone
+  let text = el.dataset.copy
+  if (!text) {
+    const lbl = el.querySelector('.lbl')
+    const lines = (n) => n.innerText.split('\n').map((x) => x.trim()).filter(Boolean)
+    const rest = [...el.children].filter((c) => c !== lbl).map((c) => lines(c).join(c.classList.contains('val') ? ' ' : ' · ')).filter(Boolean)
+    text = `${(lbl?.textContent || '').trim()}: ${rest.join(' · ')}`
+  }
+  if (await copyText(text)) {
+    toast(`Copied: ${text.length > 70 ? text.slice(0, 70) + '…' : text}`)
+    el.classList.add('copied')
+    setTimeout(() => el.classList.remove('copied'), 700)
+  } else toast('Copy failed: the browser blocked clipboard access')
+})
 
 // PDF export = the print dialog. Open folded sections for the printout, then fold them back.
 let unfolded = []
