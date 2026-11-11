@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CVE Lens</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src https://services.nvd.nist.gov https://cveawg.mitre.org https://api.first.org https://access.redhat.com https://api.osv.dev https://raw.githubusercontent.com; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<style>
+:root {
+  --bg: #f6f7f9; --card: #fff; --fg: #1b1f24; --mute: #5b6470; --line: #e2e5ea; --accent: #2563eb;
+  --crit: #b91c1c; --high: #ea580c; --med: #ca8a04; --low: #64748b; --none: #94a3b8; --kev: #dc2626; --ok: #15803d;
+  --kevbg: #fee2e2;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0f1216; --card: #171b21; --fg: #e6e9ee; --mute: #98a2b0; --line: #2a3039; --accent: #60a5fa;
+    --kevbg: #3a1215; --kev: #ef4444; --low: #7c8797; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+code, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+.wrap { max-width: 1600px; margin: 0 auto; padding: 0 16px; }
+header { padding: 28px 0 16px; }
+.brand { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+.brand h1 { margin: 0; font-size: 20px; letter-spacing: -.01em; }
+.brand span { color: var(--mute); font-size: 13px; }
+form { display: flex; gap: 8px; }
+input[type=search] { flex: 1; min-width: 0; padding: 11px 14px; font: inherit; font-size: 16px; border: 1px solid var(--line);
+  border-radius: 10px; background: var(--card); color: var(--fg); outline: none; }
+input[type=search]:focus { border-color: var(--accent); }
+button { padding: 0 18px; font: inherit; font-weight: 600; border: 0; border-radius: 10px; background: var(--accent); color: #fff; cursor: pointer; }
+.hint { color: var(--mute); font-size: 12px; margin-top: 6px; }
+.hint a { margin-right: 10px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+.card h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--mute); }
+.title { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.title h2 { font-size: 24px; margin: 0; text-transform: none; letter-spacing: 0; color: var(--fg); }
+.meta { color: var(--mute); font-size: 12px; margin-top: 4px; }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid var(--line); color: var(--mute); }
+.chip { display: inline-block; min-width: 38px; text-align: center; padding: 2px 7px; border-radius: 6px; font-weight: 700; color: #fff; font-size: 13px; }
+.CRITICAL { background: var(--crit); } .HIGH { background: var(--high); } .MEDIUM { background: var(--med); }
+.LOW { background: var(--low); } .NONE, .UNKNOWN { background: var(--none); }
+.kev { background: var(--kevbg); border: 2px solid var(--kev); }
+.kev b.tag { background: var(--kev); color: #fff; padding: 3px 10px; border-radius: 6px; margin-right: 8px; letter-spacing: .03em; }
+.kev .head { font-size: 17px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 12px; }
+.stat { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+/* 7-step risk scale for score tiles: t6 worst ... t0 fine */
+.t0 { --tc: #16a34a; } .t1 { --tc: #65a30d; } .t2 { --tc: #ca8a04; } .t3 { --tc: #f59e0b; }
+.t4 { --tc: #f97316; } .t5 { --tc: #ef4444; } .t6 { --tc: #b91c1c; }
+.stat[class*=" t"] { background: color-mix(in srgb, var(--tc) 14%, var(--card)); border: 1.5px solid var(--tc); }
+.stat[class*=" t"] .lbl { color: var(--tc); font-weight: 600; }
+@media (prefers-color-scheme: dark) {
+  .stat[class*=" t"] { background: color-mix(in srgb, var(--tc) 16%, #0b0d10); }
+  .kev .bad { color: #fca5a5; }
+  /* coloured text inside a tinted tile: lighten it so it stands off the tint */
+  .stat[class*=" t"] .bad, .stat[class*=" t"] .ok, .stat[class*=" t"] .val > span[style] { color: color-mix(in srgb, var(--tc) 45%, #fff) !important; }
+  .t6 { --tc: #e53935; } .t2 { --tc: #eab308; }
+  .stat[class*=" t"] .lbl { color: color-mix(in srgb, var(--tc) 70%, #fff); }
+}
+.stat .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--mute); }
+.stat .val { font-size: 22px; font-weight: 700; margin: 4px 0; display: flex; align-items: center; gap: 8px; }
+.stat .sub { font-size: 12px; color: var(--mute); word-break: break-all; }
+.bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; margin-top: 6px; }
+.bar i { display: block; height: 100%; background: var(--accent); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--mute); font-weight: 600; }
+.scroll { overflow-x: auto; }
+.links { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.links h3 { margin: 0 0 6px; font-size: 12px; color: var(--mute); font-weight: 600; }
+.links a { display: block; padding: 3px 0; }
+.refs a { word-break: break-all; }
+.refs li { margin-bottom: 4px; }
+.tags span { font-size: 10px; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 4px; color: var(--mute); }
+.st-fixed, .st-released, .st-not-affected, .st-Not.affected { color: var(--ok); }
+.ok { color: var(--ok); } .bad { color: var(--crit); } .warn { color: var(--high); }
+.sources span { margin-right: 14px; font-size: 12px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+.empty { color: var(--mute); }
+.nowrap { white-space: nowrap; }
+.loading { color: var(--mute); padding: 30px 0; text-align: center; }
+.progress { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin: 12px auto 10px; max-width: 420px; }
+.progress i { display: block; height: 100%; width: 4%; background: var(--accent); transition: width .25s ease; }
+.progress.busy i { animation: pulse 1.2s ease-in-out infinite alternate; }
+@keyframes pulse { from { opacity: 1 } to { opacity: .55 } }
+.srcs span { display: inline-block; margin: 0 6px; font-size: 12px; }
+.srcs .done { color: var(--ok); } .srcs .fail { color: var(--crit); }
+.filter { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.filter input, .filter select { padding: 6px 10px; font: inherit; font-size: 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--fg); }
+.filter input { flex: 1; min-width: 180px; }
+details summary { cursor: pointer; color: var(--accent); font-size: 12px; margin-top: 6px; }
+p.desc { margin: 0; white-space: pre-wrap; }
+footer { color: var(--mute); font-size: 12px; padding: 20px 0 40px; }
+button.ghost { margin-left: auto; padding: 6px 12px; font-size: 13px; background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 8px; }
+button.ghost:hover { border-color: var(--accent); }
+.caution { border-left: 3px solid var(--high); padding: 4px 10px; margin: 0 0 10px; font-size: 13px; }
+.print-only { display: none; }
+/* PDF export: the browser's print dialog ("Save as PDF"), always light, colours kept */
+@page { margin: 12mm; }
+@media print {
+  :root { --bg: #fff; --card: #fff; --fg: #111; --mute: #555; --line: #d4d7dc; --accent: #1d4ed8; --kev: #dc2626; --kevbg: #fee2e2; --low: #64748b; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { font-size: 11px; }
+  .wrap { max-width: none; padding: 0; }
+  header { padding: 0 0 6px; }
+  header form, #hint, .filter, #pdf, footer, .sources, details > summary, .poc details { display: none; }
+  .print-only { display: block; }
+  .card { padding: 10px 12px; margin-bottom: 8px; }
+  .card.keep, .stat, tr { break-inside: avoid; }
+  .grid { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .t6 { --tc: #b91c1c; } .t2 { --tc: #ca8a04; }
+  .stat[class*=" t"] { background: color-mix(in srgb, var(--tc) 14%, #fff); }
+  .stat[class*=" t"] .lbl { color: var(--tc); }
+  .stat[class*=" t"] .bad, .stat[class*=" t"] .ok, .stat[class*=" t"] .val > span[style] { color: var(--tc) !important; }
+  .kev .bad { color: var(--crit); }
+  .stat .sub { word-break: break-word; }
+  a { color: var(--accent); }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand"><h1>CVE Lens</h1><span>NVD · CVE.org · EPSS · CISA KEV · Red Hat · Ubuntu · OSV · PoC-in-GitHub, on one page</span></div>
+    <form id="f">
+      <input id="q" type="search" placeholder="CVE-2024-3094, or paste any text containing a CVE id" autocomplete="off" autofocus>
+      <button>Search</button>
+    </form>
+    <div class="hint" id="hint"></div>
+    <div class="print-only meta" id="printmeta"></div>
+  </header>
+  <main id="out"></main>
+  <footer>Your browser queries the public sources directly; only the CVE id is sent to them. The KEV catalog (CISA's GitHub copy) is kept in this browser for 12 hours. Ubuntu, Debian, Alpine and GitHub advisory data come from OSV. No server, no tracking.</footer>
+</div>
+<script>
+const CVE_RE = /CVE-\d{4}-\d{4,7}/i
+const $ = (s) => document.querySelector(s)
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+const safeUrl = (u) => /^https?:\/\//i.test(u || '') ? u : null
+const link = (u, text) => safeUrl(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(text ?? u)}</a>` : esc(text ?? u)
+const date = (s) => s ? String(s).slice(0, 10) : ''
+const band = (s) => s == null ? 'UNKNOWN' : s === 0 ? 'NONE' : s < 4 ? 'LOW' : s < 7 ? 'MEDIUM' : s < 9 ? 'HIGH' : 'CRITICAL'
+const chip = (score, sev) => score == null ? '<span class="empty">n/a</span>' : `<span class="chip ${esc((sev || band(score)).toUpperCase())}">${Number(score).toFixed(1)}</span>`
+const pct = (x, d = 1) => x == null ? 'n/a' : (x * 100).toFixed(x * 100 < 1 ? 2 : d) + '%'
+const sevWord = { critical: 'CRITICAL', important: 'HIGH', high: 'HIGH', moderate: 'MEDIUM', medium: 'MEDIUM', low: 'LOW', negligible: 'NONE' }
+const RECENT_KEY = 'cvelens.recent'
+
+function recent(add) {
+  let r = []
+  try { r = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]') } catch {}
+  if (add) { r = [add, ...r.filter((x) => x !== add)].slice(0, 8); try { localStorage.setItem(RECENT_KEY, JSON.stringify(r)) } catch {} }
+  $('#hint').innerHTML = (r.length ? 'Recent: ' : 'Try: ') + (r.length ? r : ['CVE-2024-3094', 'CVE-2021-44228', 'CVE-2023-4863'])
+    .map((c) => `<a href="?q=${esc(c)}" data-cve="${esc(c)}">${esc(c)}</a>`).join('')
+}
+
+function vendorLinks(id) {
+  const n = id.replace(/^CVE-/, '')
+  const e = encodeURIComponent(id)
+  return {
+    'Vulnerability databases': [
+      ['NVD', `https://nvd.nist.gov/vuln/detail/${e}`], ['CVE.org record', `https://www.cve.org/CVERecord?id=${e}`],
+      ['CISA KEV catalog', `https://www.cisa.gov/known-exploited-vulnerabilities-catalog?search_api_fulltext=${e}`],
+      ['FIRST EPSS', `https://api.first.org/data/v1/epss?cve=${e}&scope=time-series`],
+      ['OSV', `https://osv.dev/list?q=${e}`], ['GitHub Advisories', `https://github.com/advisories?query=${e}`],
+      ['CVE Details', `https://www.cvedetails.com/cve/${e}/`], ['Vulners', `https://vulners.com/cve/${e}`],
+    ],
+    'Linux distributions': [
+      ['Red Hat', `https://access.redhat.com/security/cve/${e}`], ['Red Hat Bugzilla (also Fedora)', `https://bugzilla.redhat.com/show_bug.cgi?id=${e}`],
+      ['Ubuntu', `https://ubuntu.com/security/${e}`], ['Debian', `https://security-tracker.debian.org/tracker/${e}`],
+      ['SUSE / openSUSE', `https://www.suse.com/security/cve/${e}.html`], ['Oracle Linux', `https://linux.oracle.com/cve/${e}.html`],
+      ['Amazon Linux', `https://explore.alas.aws.amazon.com/${e}.html`], ['Alpine', `https://security.alpinelinux.org/vuln/${e}`],
+      ['Arch Linux', `https://security.archlinux.org/${e}`], ['Gentoo', `https://bugs.gentoo.org/buglist.cgi?quicksearch=${e}`],
+    ],
+    'Other vendors': [
+      ['Microsoft MSRC', `https://msrc.microsoft.com/update-guide/vulnerability/${e}`],
+      ['Oracle security alerts', `https://www.oracle.com/security-alerts/`],
+      ['Cisco', `https://sec.cloudapps.cisco.com/security/center/publicationListing.x?searchKeyword=${e}`],
+    ],
+    'Exploits and proof of concept': [
+      ['Exploit-DB', `https://www.exploit-db.com/search?cve=${encodeURIComponent(n)}`],
+      ['GitHub repositories', `https://github.com/search?q=${e}&type=repositories`],
+      ['Metasploit modules', `https://github.com/search?q=repo%3Arapid7%2Fmetasploit-framework+${e}&type=code`],
+      ['Nuclei templates', `https://github.com/search?q=repo%3Aprojectdiscovery%2Fnuclei-templates+${e}&type=code`],
+    ],
+  }
+}
+
+// table with the first `max` rows shown and the rest behind a "N more" toggle
+function table(head, rows, max = 10) {
+  const th = `<tr>${head.map((x) => `<th>${esc(x)}</th>`).join('')}</tr>`
+  const more = rows.length > max ? `<details><summary>${rows.length - max} more</summary><div class="scroll"><table>${th}${rows.slice(max).join('')}</table></div></details>` : ''
+  return `<div class="scroll"><table>${th}${rows.slice(0, max).join('')}</table></div>${more}`
+}
+
+// rows: [{ html, text (lowercase, searched), kind (matched by the status select) }]. Over 10 rows get a filter box.
+const afterRender = []
+function filterTable(key, head, rows, placeholder, statuses) {
+  const full = () => table(head, rows.map((r) => r.html))
+  if (rows.length <= 10) return full()
+  afterRender.push(() => {
+    const q = $(`#${key}q`), s = $(`#${key}s`), out = $(`#${key}t`)
+    const apply = () => {
+      const terms = q.value.toLowerCase().split(/\s+/).filter(Boolean), st = s?.value || ''
+      const hit = rows.filter((r) => (!st || r.kind === st) && terms.every((t) => r.text.includes(t)))
+      out.innerHTML = !(terms.length || st) ? full() : hit.length
+        ? table(head, hit.map((r) => r.html), Infinity) + `<div class="meta">${hit.length} of ${rows.length} rows</div>` : '<div class="empty">No matching rows.</div>'
+    }
+    q.addEventListener('input', apply)
+    s?.addEventListener('change', apply)
+  })
+  return `<div class="filter"><input id="${key}q" type="search" placeholder="${esc(placeholder)}" autocomplete="off">${statuses ? `<select id="${key}s"><option value="">All statuses</option>${
+    statuses.map(([v, t]) => `<option value="${v}">${esc(t)}</option>`).join('')}</select>` : ''}</div><div id="${key}t">${full()}</div>`
+}
+
+function pickCvss(nvd, org, rh) {
+  const all = [...(nvd?.metrics || []), ...(org?.metrics || [])].filter((m) => m.score != null)
+  const order = { '3.1': 0, '3.0': 1, '4.0': 2, '2.0': 3 }
+  all.sort((a, b) => (a.type === 'Primary' ? 0 : 1) - (b.type === 'Primary' ? 0 : 1) || order[a.version] - order[b.version])
+  return all[0] || (rh?.cvss3 != null ? { score: rh.cvss3, version: '3.x', source: 'Red Hat', vector: rh.vector } : null)
+}
+
+// ---------------------------------------------------------------- sources (queried from the browser)
+class NotFound extends Error {}
+async function getJson(url) {
+  let r
+  for (let attempt = 0; ; attempt++) {
+    try { r = await fetch(url, { headers: { Accept: 'application/json' }, referrerPolicy: 'no-referrer' }); break }
+    catch {
+      // no readable response: network error, a browser extension blocking the host, or an error
+      // reply without CORS headers (e.g. a CDN 5xx/403). Retry once, then report.
+      if (attempt) throw new Error('no readable response (blocked by an extension, network error, or a temporary error at the source)')
+      await new Promise((ok) => setTimeout(ok, 1500))
+    }
+  }
+  if (r.status === 404) throw new NotFound(url)
+  if (r.status === 403 || r.status === 429) throw new Error(`rate limited (HTTP ${r.status}), try again in 30 s`)
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return r.json()
+}
+const en = (ds) => (ds || []).find((d) => (d.lang || '').toLowerCase().startsWith('en'))?.value || ds?.[0]?.value || ''
+const num = (v) => (v == null || v === '' || isNaN(+v) ? null : +v)
+
+async function srcNvd(id) {
+  const d = await getJson(`https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=${id}`)
+  const c = d.vulnerabilities?.[0]?.cve
+  if (!c) throw new NotFound(id)
+  const metrics = []
+  for (const [k, ver] of [['cvssMetricV40', '4.0'], ['cvssMetricV31', '3.1'], ['cvssMetricV30', '3.0'], ['cvssMetricV2', '2.0']])
+    for (const m of c.metrics?.[k] || []) {
+      const cd = m.cvssData || {}
+      metrics.push({ version: ver, score: cd.baseScore, severity: cd.baseSeverity || m.baseSeverity, vector: cd.vectorString, source: m.source, type: m.type })
+    }
+  const cwes = [...new Set((c.weaknesses || []).flatMap((w) => (w.description || []).map((x) => x.value)).filter((v) => v?.startsWith('CWE-')))].sort()
+  const seen = new Set(), cpes = []
+  for (const conf of c.configurations || []) for (const node of conf.nodes || []) for (const m of node.cpeMatch || []) {
+    if (!m.vulnerable) continue
+    const p = (m.criteria || '').split(':')
+    if (p.length < 6) continue
+    const rng = [m.versionStartIncluding && `>= ${m.versionStartIncluding}`, m.versionStartExcluding && `> ${m.versionStartExcluding}`,
+      m.versionEndIncluding && `<= ${m.versionEndIncluding}`, m.versionEndExcluding && `< ${m.versionEndExcluding}`].filter(Boolean).join(' ')
+    const versions = rng || (['*', '-'].includes(p[5]) ? '' : p[5])
+    const k = [p[3], p[4], versions].join('|')
+    if (!seen.has(k)) { seen.add(k); cpes.push({ vendor: p[3], product: p[4], versions }) }
+  }
+  return { status: c.vulnStatus, published: c.published, modified: c.lastModified, description: en(c.descriptions), metrics, cwes,
+    cpes: cpes.slice(0, 80), cpes_total: cpes.length, references: (c.references || []).map((r) => ({ url: r.url, source: r.source, tags: r.tags || [] })) }
+}
+
+function recordCvss(metrics, source) {
+  const out = []
+  for (const m of metrics || []) for (const [k, ver] of [['cvssV4_0', '4.0'], ['cvssV3_1', '3.1'], ['cvssV3_0', '3.0'], ['cvssV2_0', '2.0']])
+    if (m[k]) out.push({ version: ver, score: m[k].baseScore, severity: m[k].baseSeverity, vector: m[k].vectorString, source, type: source === 'CISA-ADP' ? 'ADP' : 'CNA' })
+  return out
+}
+
+async function srcCveorg(id) {
+  const d = await getJson(`https://cveawg.mitre.org/api/cve/${id}`)
+  const meta = d.cveMetadata || {}, cont = d.containers || {}, cna = cont.cna || {}
+  const metrics = recordCvss(cna.metrics, meta.assignerShortName)
+  const refs = (cna.references || []).map((r) => ({ url: r.url, tags: r.tags || [] }))
+  let ssvc = null
+  for (const adp of cont.adp || []) {
+    metrics.push(...recordCvss(adp.metrics, adp.providerMetadata?.shortName || 'ADP'))
+    for (const m of adp.metrics || []) if (m.other?.type === 'ssvc') ssvc = Object.assign({}, ...(m.other.content?.options || []))
+    refs.push(...(adp.references || []).map((r) => ({ url: r.url, tags: r.tags || [] })))
+  }
+  const affected = (cna.affected || []).map((a) => ({
+    vendor: a.vendor, product: a.product || a.packageName, default: a.defaultStatus,
+    versions: (a.versions || []).filter((v) => v.status === 'affected').map((v) => {
+      const lo = ['', '0', '*'].includes(v.version || '') ? '' : v.version
+      return v.lessThan ? (lo ? `${lo} to < ${v.lessThan}` : `< ${v.lessThan}`) : v.lessThanOrEqual ? (lo ? `${lo} to <= ${v.lessThanOrEqual}` : `<= ${v.lessThanOrEqual}`) : v.version
+    }).slice(0, 12),
+  }))
+  const cwes = [...new Set((cna.problemTypes || []).flatMap((p) => (p.descriptions || []).map((x) => x.cweId)).filter(Boolean))].sort()
+  return { state: meta.state, assigner: meta.assignerShortName, published: meta.datePublished, updated: meta.dateUpdated, title: cna.title,
+    description: en(cna.descriptions) || en(cna.rejectedReasons), metrics, ssvc, affected: affected.slice(0, 60), cwes, references: refs }
+}
+
+async function srcEpss(id) {
+  const x = (await getJson(`https://api.first.org/data/v1/epss?cve=${id}`)).data?.[0]
+  if (!x) throw new NotFound(id)
+  return { epss: num(x.epss), percentile: num(x.percentile), date: x.date }
+}
+
+// CISA KEV: CISA's own GitHub copy (www.cisa.gov sends no CORS header). Kept in localStorage, compacted.
+const KEV_URL = 'https://raw.githubusercontent.com/cisagov/kev-data/main/known_exploited_vulnerabilities.json'
+const KEV_KEY = 'cvelens.kev.v1', KEV_TTL = 12 * 3600e3
+let kevMem = null
+async function kevCatalog() {
+  if (kevMem && Date.now() - kevMem.at < KEV_TTL) return kevMem
+  let stored = null
+  try { stored = JSON.parse(localStorage.getItem(KEV_KEY) || 'null') } catch {}
+  if (stored?.by && Date.now() - stored.at < KEV_TTL) return (kevMem = stored)
+  try {
+    const d = await getJson(KEV_URL)
+    const v = d.vulnerabilities || []
+    if (v.length < 100) throw new Error('KEV feed looks incomplete')
+    const by = {}
+    for (const x of v) by[String(x.cveID).toUpperCase()] = [x.vendorProject, x.product, x.vulnerabilityName, x.dateAdded, x.dueDate, x.requiredAction, x.knownRansomwareCampaignUse === 'Known' ? 1 : 0]
+    kevMem = { at: Date.now(), version: d.catalogVersion, count: v.length, by }
+    try { localStorage.setItem(KEV_KEY, JSON.stringify(kevMem)) } catch {}
+    return kevMem
+  } catch (e) {
+    if (stored?.by) return (kevMem = stored) // stale beats nothing
+    throw e
+  }
+}
+async function srcKev(id) {
+  const c = await kevCatalog(), x = c.by[id]
+  const base = { listed: !!x, catalog_size: c.count, catalog_version: c.version }
+  if (!x) return base
+  const [vendor, product, name, added, due, action, rw] = x
+  return { ...base, vendor, product, name, added, due, action, ransomware: !!rw }
+}
+
+async function srcRedhat(id) {
+  // Red Hat's CDN caches the CORS header of whichever site fetched a CVE first (no Vary: Origin),
+  // so other sites get blocked. A per-origin query parameter gives each site its own cache entry.
+  const d = await getJson(`https://access.redhat.com/hydra/rest/securitydata/cve/${id}.json?cl=${encodeURIComponent(location.origin)}`)
+  const c3 = d.cvss3 || {}
+  return { severity: d.threat_severity, public: d.public_date, cvss3: num(c3.cvss3_base_score), vector: c3.cvss3_scoring_vector,
+    cwe: d.cwe, statement: d.statement, details: d.details || [], bugzilla: d.bugzilla?.url,
+    fixed: (d.affected_release || []).map((a) => ({ product: a.product_name, package: a.package, advisory: a.advisory, date: a.release_date })),
+    state: (d.package_state || []).map((p) => ({ product: p.product_name, package: p.package_name, state: p.fix_state })) }
+}
+
+// Ubuntu via OSV (ubuntu.com sends no CORS header). OSV lists releases with a fix or pending fix only.
+async function srcUbuntu(id) {
+  const d = await getJson(`https://api.osv.dev/v1/vulns/UBUNTU-${id}`)
+  const pk = new Map()
+  for (const a of d.affected || []) {
+    const name = a.package?.name || '?'
+    const fixed = (a.ranges || []).flatMap((r) => r.events || []).find((e) => e.fixed)?.fixed
+    if (!pk.has(name)) pk.set(name, [])
+    pk.get(name).push({ release: (a.package?.ecosystem || '').replace(/^Ubuntu:/, ''), status: fixed ? 'released' : 'needed', version: fixed || '' })
+  }
+  return { priority: (d.severity || []).find((s) => s.type === 'Ubuntu')?.score || null, cvss3: null, description: d.details || '', notes: [],
+    notices: (d.related || []).filter((r) => r.startsWith('USN-')), packages: [...pk].map(([name, statuses]) => ({ name, statuses })).slice(0, 30) }
+}
+
+// OSV: the CVE record (GitHub advisory aliases, SUSE/AlmaLinux/... advisory ids) plus the Debian and
+// Alpine records, and up to 3 GitHub advisories for language packages (npm, PyPI, Maven, Go, ...).
+async function srcOsv(id) {
+  const api = (v) => getJson(`https://api.osv.dev/v1/vulns/${encodeURIComponent(v)}`).catch((e) => { if (e instanceof NotFound) return null; throw e })
+  const [base, deb, alp] = await Promise.all([api(id), api(`DEBIAN-${id}`), api(`ALPINE-${id}`)])
+  if (!base && !deb && !alp) throw new NotFound(id)
+  const ghsaIds = (base?.aliases || []).filter((a) => a.startsWith('GHSA-'))
+  const ghsa = (await Promise.all(ghsaIds.slice(0, 3).map(api))).filter(Boolean)
+  const rows = [], seen = new Set()
+  for (const rec of [deb, alp, ...ghsa, base].filter(Boolean)) for (const a of rec.affected || []) {
+    const p = a.package
+    if (!p?.name || !p.ecosystem || p.ecosystem.startsWith('Ubuntu')) continue // Ubuntu has its own section
+    const k = `${p.ecosystem}|${p.name}`
+    if (seen.has(k)) continue
+    seen.add(k)
+    const ev = (a.ranges || []).flatMap((r) => r.events || [])
+    const codename = (p.purl || '').match(/distro=([a-z]+)/)?.[1]
+    rows.push({ eco: p.ecosystem.replace(':', ' ') + (codename ? ` (${codename})` : ''), name: p.name, advisory: rec.id,
+      fixed: [...new Set(ev.filter((e) => e.fixed).map((e) => e.fixed))], last: ev.find((e) => e.last_affected)?.last_affected,
+      urgency: a.ecosystem_specific?.urgency })
+  }
+  return { rows, ghsa: ghsaIds, related: base?.related || [] }
+}
+
+// Public proof-of-concept repositories on GitHub, collected by the PoC-in-GitHub project (one file per CVE).
+async function srcPoc(id) {
+  const d = await getJson(`https://raw.githubusercontent.com/nomi-sec/PoC-in-GitHub/master/${id.split('-')[1]}/${id}.json`)
+  const repos = (Array.isArray(d) ? d : []).map((r) => ({ name: r.full_name, url: r.html_url, desc: r.description || '',
+    stars: r.stargazers_count || 0, created: r.created_at, pushed: r.pushed_at }))
+  repos.sort((a, b) => b.stars - a.stars)
+  return { total: repos.length, repos: repos.slice(0, 100) }
+}
+
+const SOURCES = { nvd: srcNvd, cveorg: srcCveorg, epss: srcEpss, kev: srcKev, redhat: srcRedhat, ubuntu: srcUbuntu, osv: srcOsv, poc: srcPoc }
+const LABEL = { nvd: 'NVD', cveorg: 'CVE.org', epss: 'EPSS', kev: 'KEV', redhat: 'Red Hat', ubuntu: 'Ubuntu', osv: 'OSV', poc: 'PoC-in-GitHub' }
+const memo = new Map() // complete answers, for back/forward and repeat searches
+async function lookup(id, onProgress = () => {}) {
+  const hit = memo.get(id)
+  if (hit && Date.now() - hit.t < 30 * 60e3) return hit.d
+  const entries = await Promise.all(Object.entries(SOURCES).map(async ([k, fn]) => {
+    let res
+    try { res = [k, { ok: true, data: await fn(id) }] }
+    catch (e) { res = [k, e instanceof NotFound ? { ok: true, data: null } : { ok: false, error: e.message || String(e) }] }
+    onProgress(k, res[1])
+    return res
+  }))
+  const d = { id, fetched_at: new Date().toISOString().slice(0, 19) + 'Z', cached: false, sources: Object.fromEntries(entries) }
+  if (entries.every(([, r]) => r.ok)) memo.set(id, { t: Date.now(), d: { ...d, cached: true } })
+  return d
+}
+
+function render(d) {
+  const S = d.sources, g = (k) => (S[k]?.ok ? S[k].data : null)
+  const nvd = g('nvd'), org = g('cveorg'), ep = g('epss'), kev = g('kev'), rh = g('redhat'), ub = g('ubuntu'), osv = g('osv'), poc = g('poc')
+  const found = nvd || org || rh || ub || osv
+  afterRender.length = 0
+  const h = []
+  const best = pickCvss(nvd, org, rh)
+  h.push(`<section class="card"><div class="title"><h2>${esc(d.id)}</h2>
+    ${best ? chip(best.score, best.severity) : ''}
+    ${kev?.listed ? '<span class="chip" style="background:var(--kev)">⚠ KEV · exploited</span>' : ''}
+    ${org?.state ? `<span class="pill">${esc(org.state)}</span>` : ''}${nvd?.status ? `<span class="pill">NVD: ${esc(nvd.status)}</span>` : ''}
+    <button class="ghost" id="pdf" type="button" title="Opens the print dialog: choose Save as PDF">Export PDF</button></div>
+    <div class="meta">${[org?.assigner && `Assigned by ${esc(org.assigner)}`, (org?.published || nvd?.published) && `published ${date(org?.published || nvd?.published)}`,
+      (org?.updated || nvd?.modified) && `updated ${date(nvd?.modified || org?.updated)}`].filter(Boolean).join(' · ')}</div>
+    ${org?.title ? `<p style="margin:10px 0 4px;font-weight:600">${esc(org.title)}</p>` : ''}
+    <p class="desc" style="margin-top:${org?.title ? 0 : 10}px">${esc(org?.description || nvd?.description || rh?.details?.[0] || ub?.description || (found ? '' : 'No record found in any source. Check the id, or it may be reserved but not yet published.'))}</p>
+  </section>`)
+
+  if (kev?.listed) h.push(`<section class="card kev keep"><div class="head"><b class="tag">⚠ CISA KEV</b><b>Actively exploited in the wild. Patch first.</b>
+    ${kev.ransomware ? ' <b class="bad">Known use in ransomware campaigns.</b>' : ''}</div>
+    <div style="margin-top:8px">${esc(kev.name)}${kev.vendor ? ` (${esc(kev.vendor)} ${esc(kev.product)})` : ''}</div>
+    <div class="meta">Added ${esc(kev.added)} · US federal remediation due ${esc(kev.due)}</div>
+    ${kev.action ? `<div style="margin-top:6px"><b>Required action:</b> ${esc(kev.action)}</div>` : ''}</section>`)
+
+  // score cards, each coloured by risk level (see .t0-.t6)
+  const cards = []
+  const lvlScore = (x) => x == null || isNaN(x) ? null : x >= 9 ? 6 : x >= 8 ? 5 : x >= 7 ? 4 : x >= 5.5 ? 3 : x >= 4 ? 2 : x > 0 ? 1 : 0
+  const lvlEpss = (x) => x == null ? null : x >= 0.5 ? 6 : x >= 0.2 ? 5 : x >= 0.05 ? 4 : x >= 0.01 ? 3 : x >= 0.001 ? 2 : 1
+  const lvlWord = (w) => ({ critical: 6, important: 5, high: 5, moderate: 3, medium: 3, low: 1, negligible: 0 })[(w || '').toLowerCase()] ?? null
+  const lvlSsvc = (v) => !v ? null : v.Exploitation === 'active' ? 6 : v.Exploitation === 'poc' ? 4 : v.Automatable === 'yes' ? 3 : 1
+  const tile = (lvl) => `stat${lvl == null ? '' : ' t' + lvl}`
+  cards.push(`<div class="${tile(lvlScore(best?.score))}"><div class="lbl">CVSS ${best ? esc(best.version) : ''}</div><div class="val">${chip(best?.score, best?.severity)}${best ? `<span style="font-size:13px">${esc(best.severity || band(best.score))}</span>` : ''}</div>
+    <div class="sub">${best ? `${esc(best.source || '')}<br><code>${esc(best.vector || '')}</code>` : 'not scored yet'}</div></div>`)
+  cards.push(`<div class="${tile(lvlEpss(ep?.epss))}"><div class="lbl">EPSS (exploit in next 30 days)</div><div class="val">${ep ? pct(ep.epss) : '<span class="empty">n/a</span>'}</div>
+    <div class="sub">${ep ? `higher than ${pct(ep.percentile)} of CVEs · ${esc(ep.date)}` : S.epss?.ok ? 'no score yet' : esc(S.epss?.error)}</div>${ep ? `<div class="bar"><i style="width:${(ep.percentile * 100).toFixed(1)}%"></i></div>` : ''}</div>`)
+  cards.push(`<div class="${tile(kev ? (kev.listed ? 6 : 0) : null)}"><div class="lbl">CISA KEV</div><div class="val">${kev ? (kev.listed ? '<span style="color:var(--kev);font-weight:700">⚠ Exploited</span>' : '<span class="ok">Not listed</span>') : '<span class="empty">n/a</span>'}</div>
+    <div class="sub">${kev ? `catalog ${esc(kev.catalog_version || '')}, ${kev.catalog_size} entries` : esc(S.kev?.error)}</div></div>`)
+  cards.push(`<div class="${tile(rh ? lvlWord(rh.severity) ?? lvlScore(rh.cvss3) : null)}"><div class="lbl">Red Hat</div><div class="val">${rh ? `${chip(rh.cvss3, sevWord[(rh.severity || '').toLowerCase()])}<span style="font-size:13px">${esc(rh.severity || '')}</span>` : '<span class="empty">n/a</span>'}</div>
+    <div class="sub">${rh ? `<code>${esc(rh.vector || '')}</code>` : S.redhat?.ok ? 'no Red Hat record' : esc(S.redhat?.error)}</div></div>`)
+  cards.push(`<div class="${tile(ub ? lvlWord(ub.priority) ?? lvlScore(ub.cvss3) : null)}"><div class="lbl">Ubuntu priority</div><div class="val">${ub ? `${ub.cvss3 != null ? chip(ub.cvss3) : ''}<span style="font-size:15px">${esc(ub.priority || 'n/a')}</span>` : '<span class="empty">n/a</span>'}</div>
+    <div class="sub">${ub ? (ub.notices.length ? 'USN: ' + ub.notices.map(esc).join(', ') : 'no USN yet') : S.ubuntu?.ok ? 'no Ubuntu record' : esc(S.ubuntu?.error)}</div></div>`)
+  cards.push(`<div class="${tile(poc?.total ? (poc.total >= 10 ? 5 : 4) : null)}"><div class="lbl">Public exploit code</div><div class="val">${poc?.total ? `${poc.total} <span style="font-size:13px">GitHub ${poc.total === 1 ? 'repo' : 'repos'}</span>` : `<span class="empty" style="font-size:15px">${S.poc?.ok ? 'none listed' : 'n/a'}</span>`}</div>
+    <div class="sub">${poc?.total ? `top: ${esc(poc.repos[0].name)} (${poc.repos[0].stars}★)` : S.poc?.ok ? 'not in PoC-in-GitHub; exploits may still exist' : esc(S.poc?.error)}</div></div>`)
+  if (org?.ssvc) cards.push(`<div class="${tile(lvlSsvc(org.ssvc))}"><div class="lbl">CISA SSVC</div><div class="sub" style="font-size:13px;color:var(--fg);margin-top:6px">
+    ${Object.entries(org.ssvc).map(([k, v]) => `${esc(k)}: <b class="${v === 'active' || v === 'total' || v === 'yes' ? 'bad' : ''}">${esc(v)}</b>`).join('<br>')}</div></div>`)
+  h.push(`<section class="card keep"><h2>Scores</h2><div class="grid">${cards.join('')}</div></section>`)
+
+  // all CVSS metrics + weaknesses
+  const metrics = [...(nvd?.metrics || []).map((m) => ({ ...m, from: 'NVD' })), ...(org?.metrics || []).map((m) => ({ ...m, from: 'CVE.org' }))]
+  if (rh?.cvss3 != null) metrics.push({ version: (rh.vector || '').match(/CVSS:(\d\.\d)/)?.[1] || '3', score: rh.cvss3, vector: rh.vector, source: 'Red Hat', from: 'Red Hat' })
+  const cwes = [...new Set([...(nvd?.cwes || []), ...(org?.cwes || []), ...(rh?.cwe ? rh.cwe.match(/CWE-\d+/g) || [] : [])])]
+  if (metrics.length || cwes.length) h.push(`<section class="card"><h2>All scores</h2>
+    ${metrics.length ? `<div class="scroll"><table><tr><th>Score</th><th>Version</th><th>Source</th><th>Vector</th></tr>
+    ${metrics.map((m) => `<tr><td>${chip(m.score, m.severity)}</td><td>${esc(m.version)}</td><td>${esc(m.source || '')} <span class="empty">${esc(m.type || '')} via ${esc(m.from)}</span></td><td><code>${esc(m.vector || '')}</code></td></tr>`).join('')}</table></div>` : ''}
+    ${cwes.length ? `<div style="margin-top:10px">Weakness: ${cwes.map((c) => link(`https://cwe.mitre.org/data/definitions/${c.replace('CWE-', '')}.html`, c)).join(', ')}</div>` : ''}</section>`)
+
+  // affected products
+  const aff = org?.affected?.length ? org.affected : null
+  if (aff || nvd?.cpes?.length) h.push(`<section class="card"><h2>Affected products</h2>${table(['Vendor', 'Product', 'Affected versions'],
+    aff ? aff.map((a) => `<tr><td>${esc(a.vendor || '')}</td><td>${esc(a.product || '')}</td><td class="mono">${esc(a.versions.join(', ') || (a.default === 'affected' ? 'all' : ''))}</td></tr>`)
+      : nvd.cpes.map((c) => `<tr><td>${esc(c.vendor)}</td><td>${esc(c.product)}</td><td class="mono">${esc(c.versions || 'all')}</td></tr>`))}${!aff && nvd.cpes_total > nvd.cpes.length ? `<div class="meta">${nvd.cpes_total - nvd.cpes.length} more on NVD</div>` : ''}
+    <div class="meta">${aff ? 'From the CNA record (CVE.org).' : 'From NVD CPE configurations.'}</div></section>`)
+
+  // distro status
+  const distro = []
+  if (rh && (rh.fixed.length || rh.state.length)) {
+    const rhRows = [
+    ...rh.fixed.map((f) => ({ kind: 'fixed', text: `${f.product} ${f.package || ''} ${f.advisory || ''}`.toLowerCase(), html: `<tr><td>${esc(f.product)}</td><td class="mono">${esc(f.package || '')}</td><td class="ok nowrap">${f.advisory ? link(`https://access.redhat.com/errata/${f.advisory}`, f.advisory) : 'Fixed'} <span class="empty">${date(f.date)}</span></td></tr>` })),
+    ...rh.state.map((s) => ({ kind: /not affected/i.test(s.state) ? 'notaff' : 'open', text: `${s.product} ${s.package || ''} ${s.state}`.toLowerCase(), html: `<tr><td>${esc(s.product)}</td><td class="mono">${esc(s.package || '')}</td><td class="${/not affected/i.test(s.state) ? 'ok' : /affected|deferred|fix/i.test(s.state) ? 'warn' : ''}">${esc(s.state)}</td></tr>` }))]
+    const open = rhRows.filter((r) => r.kind === 'open').length, notaff = rhRows.filter((r) => r.kind === 'notaff').length
+    distro.push(`<section class="card"><h2>Red Hat (${rh.fixed.length} fixed, ${open} open, ${notaff} not affected)</h2>
+    ${filterTable('rh', ['Product', 'Package', 'Status'], rhRows, 'Filter products or packages, e.g. RHEL 9, openshift, kernel',
+      [['fixed', 'Fixed'], ['open', 'Affected / open'], ['notaff', 'Not affected']])}
+    ${rh.statement ? `<details><summary>Red Hat statement</summary><p class="desc">${esc(rh.statement)}</p></details>` : ''}${rh.bugzilla ? `<div class="meta">${link(rh.bugzilla, 'Bugzilla')}</div>` : ''}</section>`)
+  }
+  if (ub && ub.packages.length) distro.push(`<section class="card"><h2>Ubuntu</h2><div class="meta" style="margin:-6px 0 6px">Releases with a fix or a pending fix (via OSV). Unaffected releases are not listed; see the Ubuntu link below.</div>${table(['Package', 'Release', 'Status'],
+    ub.packages.flatMap((p) => p.statuses.map((s, i) => `<tr><td class="mono">${i ? '' : esc(p.name)}</td><td>${esc(s.release)}</td><td class="${s.status === 'released' || s.status === 'not-affected' ? 'ok' : s.status === 'needed' || s.status === 'needs-triage' || s.status === 'pending' ? 'warn' : ''}">${esc(s.status)} <span class="mono empty">${esc(s.version || '')}</span></td></tr>`)), 12)}
+    ${ub.notes.length ? `<details><summary>Ubuntu notes</summary>${ub.notes.map((n) => `<p class="desc">${esc(n)}</p>`).join('')}</details>` : ''}</section>`)
+  if (osv && (osv.rows.length || osv.related.length || osv.ghsa.length)) {
+    const groupOf = (r) => /^(open)?SUSE-/i.test(r) ? 'SUSE / openSUSE' : r.startsWith('ALSA-') ? 'AlmaLinux' : r.startsWith('RLSA-') ? 'Rocky Linux'
+      : /^(DSA|DLA)-/.test(r) ? 'Debian' : r.startsWith('USN-') ? null : 'Other'
+    const groups = {}
+    for (const r of osv.related) { const gname = groupOf(r); if (gname) (groups[gname] ||= []).push(r) }
+    const osvLink = (x) => link(`https://osv.dev/vulnerability/${encodeURIComponent(x)}`, x)
+    const adv = [osv.ghsa.length ? `<div><b>GitHub advisory:</b> ${osv.ghsa.map((x) => link(`https://github.com/advisories/${encodeURIComponent(x)}`, x)).join(', ')}</div>` : '',
+      ...Object.entries(groups).map(([gname, ids]) => `<div><b>${esc(gname)}</b> (${ids.length}): ${ids.slice(0, 8).map(osvLink).join(', ')}${ids.length > 8 ? ` <span class="empty">+${ids.length - 8} more on OSV</span>` : ''}</div>`)].join('')
+    const orows = osv.rows.map((r) => {
+      const ok = r.fixed.length > 0
+      const st = ok ? `fixed in <span class="mono">${esc(r.fixed.join(', '))}</span>` : r.last ? `no fix, affected up to <span class="mono">${esc(r.last)}</span>` : 'not fixed'
+      const urg = r.urgency && r.urgency !== 'not yet assigned' ? ` <span class="empty">${esc(r.urgency)}</span>` : ''
+      return { kind: ok ? 'fixed' : 'open', text: `${r.eco} ${r.name} ${r.fixed.join(' ')} ${r.urgency || ''} ${ok ? 'fixed' : 'not fixed'}`.toLowerCase(),
+        html: `<tr><td>${esc(r.eco)}</td><td class="mono">${esc(r.name)}</td><td class="${ok ? 'ok' : 'warn'}">${st}${urg}</td></tr>` }
+    })
+    distro.push(`<section class="card"><h2>Other distributions and packages (via OSV)</h2>
+      ${orows.length ? filterTable('osv', ['Distribution / ecosystem', 'Package', 'Status'], orows, 'Filter, e.g. debian 12, alpine, maven', [['fixed', 'Fixed'], ['open', 'Not fixed']]) : ''}
+      ${adv ? `<div style="margin-top:10px;font-size:13px">${adv}</div>` : ''}
+      <div class="meta">Debian and Alpine fix status, and language packages from GitHub advisories. Releases not listed are unaffected or not yet triaged.</div></section>`)
+  }
+  h.push(...distro)
+
+  if (poc?.total) h.push(`<section class="card poc"><h2>Public exploit code (${poc.total} GitHub ${poc.total === 1 ? 'repository' : 'repositories'})</h2>
+    <div class="caution"><b>Not vetted.</b> Proof-of-concept repositories are sometimes fake or contain malware. Read the code before running it, and run it only in an isolated lab.</div>
+    ${table(['Repository', 'Stars', 'Created', 'Updated', 'Description'], poc.repos.map((r) => `<tr><td>${link(r.url, r.name)}</td><td>${r.stars}</td><td class="nowrap">${date(r.created)}</td><td class="nowrap">${date(r.pushed)}</td><td>${esc(r.desc.slice(0, 160))}</td></tr>`))}
+    <div class="meta">${poc.total > poc.repos.length ? `The ${poc.repos.length} most starred. ` : ''}Sorted by stars. From ${link('https://github.com/nomi-sec/PoC-in-GitHub', 'PoC-in-GitHub')}.</div></section>`)
+
+  // vendor links
+  h.push(`<section class="card"><h2>Look it up elsewhere</h2><div class="links">${Object.entries(vendorLinks(d.id)).map(([grp, ls]) =>
+    `<div><h3>${esc(grp)}</h3>${ls.map(([t, u]) => link(u, t)).join('')}</div>`).join('')}</div></section>`)
+
+  // references
+  const refs = new Map()
+  for (const r of [...(nvd?.references || []), ...(org?.references || [])]) {
+    if (!safeUrl(r.url)) continue
+    const k = r.url.replace(/\/$/, '')
+    refs.set(k, { url: r.url, tags: [...new Set([...(refs.get(k)?.tags || []), ...(r.tags || []).filter((t) => !t.startsWith('x_'))])] })
+  }
+  const refList = [...refs.values()].sort((a, b) => (b.tags.some((t) => /patch|advisory|exploit/i.test(t)) ? 1 : 0) - (a.tags.some((t) => /patch|advisory|exploit/i.test(t)) ? 1 : 0))
+  if (refList.length) h.push(`<section class="card refs"><h2>References (${refList.length})</h2><ul style="margin:0;padding-left:18px">
+    ${refList.slice(0, 40).map((r) => `<li>${link(r.url)}<span class="tags">${r.tags.slice(0, 4).map((t) => `<span>${esc(t)}</span>`).join('')}</span></li>`).join('')}</ul>
+    ${refList.length > 40 ? `<details><summary>${refList.length - 40} more</summary><ul style="padding-left:18px">${refList.slice(40).map((r) => `<li>${link(r.url)}</li>`).join('')}</ul></details>` : ''}</section>`)
+
+
+  h.push(`<div class="sources meta">${Object.entries(S).map(([k, r]) => `<span class="${r.ok ? (r.data ? 'ok' : '') : 'bad'}" title="${esc(r.error || '')}">${r.ok ? (r.data ? '●' : '○') : '✕'} ${LABEL[k] || k}${r.ok ? '' : ': ' + esc(r.error)}</span>`).join('')}
+    <span>${d.cached ? 'cached' : 'live'} · ${esc(d.fetched_at)}</span></div>`)
+  $('#out').innerHTML = h.join('')
+  afterRender.forEach((f) => f())
+  $('#pdf')?.addEventListener('click', () => print())
+}
+
+// PDF export = the print dialog. Open folded sections for the printout, then fold them back.
+let unfolded = []
+addEventListener('beforeprint', () => {
+  unfolded = [...document.querySelectorAll('#out details:not([open])')].filter((el) => !el.closest('.poc'))
+  unfolded.forEach((el) => { el.open = true })
+  $('#printmeta').textContent = `Exported ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC from ${location.href}`
+})
+addEventListener('afterprint', () => { unfolded.forEach((el) => { el.open = false }); unfolded = [] })
+
+async function search(raw, push = true) {
+  const m = String(raw || '').match(CVE_RE)
+  if (!m) { $('#out').innerHTML = '<div class="card empty">Enter a CVE id such as CVE-2024-3094.</div>'; return }
+  const id = m[0].toUpperCase()
+  $('#q').value = id
+  if (push && new URLSearchParams(location.search).get('q') !== id) history.pushState({}, '', '?q=' + id)
+  document.title = id + ' · CVE Lens'
+  const names = Object.keys(SOURCES), label = LABEL
+  $('#out').innerHTML = `<div class="loading">Looking up ${esc(id)}…<div class="progress busy"><i id="pbar"></i></div>
+    <div class="srcs">${names.map((k) => `<span id="src-${k}">○ ${label[k]}</span>`).join('')}</div></div>`
+  let done = 0
+  const progress = (k, r) => {
+    done++
+    const bar = document.getElementById('pbar'), el = document.getElementById('src-' + k)
+    if (bar) bar.style.width = `${Math.max(4, (done / names.length) * 100)}%`
+    if (el) { el.className = r.ok ? 'done' : 'fail'; el.textContent = `${r.ok ? '●' : '✕'} ${label[k]}` }
+  }
+  try {
+    const d = await lookup(id, progress)
+    if ($('#q').value.toUpperCase() !== id) return // a newer search started
+    render(d)
+    recent(id)
+  } catch (e) {
+    $('#out').innerHTML = `<div class="card bad">Lookup failed: ${esc(e.message)}</div>`
+  }
+}
+
+$('#f').addEventListener('submit', (e) => { e.preventDefault(); search($('#q').value) })
+$('#q').addEventListener('paste', (e) => {
+  const t = e.clipboardData?.getData('text') || ''
+  const m = t.match(CVE_RE)
+  if (m && t.trim().length > m[0].length) { e.preventDefault(); search(m[0]) }
+})
+$('#hint').addEventListener('click', (e) => { const c = e.target.dataset?.cve; if (c) { e.preventDefault(); search(c) } })
+addEventListener('popstate', () => { const m = (new URLSearchParams(location.search).get('q') || '').match(CVE_RE); if (m) search(m[0], false); else $('#out').innerHTML = '' })
+addEventListener('keydown', (e) => { if (e.key === '/' && document.activeElement !== $('#q')) { e.preventDefault(); $('#q').select() } })
+recent()
+const start = location.pathname.match(CVE_RE) || new URLSearchParams(location.search).get('q')?.match(CVE_RE)
+if (start) search(start[0], false)
+</script>
+</body>
+</html>
