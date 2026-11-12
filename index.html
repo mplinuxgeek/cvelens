@@ -565,9 +565,9 @@ async function srcPoc(id) {
 const SOURCES = { nvd: srcNvd, cveorg: srcCveorg, epss: srcEpss, kev: srcKev, redhat: srcRedhat, suse: srcSuse, oracle: srcOracle, amazon: srcAmazon, alma: srcAlma, rocky: srcRocky, azure: srcAzure, ubuntu: srcUbuntu, osv: srcOsv, poc: srcPoc }
 const LABEL = { nvd: 'NVD', cveorg: 'CVE.org', epss: 'EPSS', kev: 'KEV', redhat: 'Red Hat', suse: 'SUSE', oracle: 'Oracle Linux', amazon: 'Amazon Linux', alma: 'AlmaLinux', rocky: 'Rocky Linux', azure: 'Azure Linux', ubuntu: 'Ubuntu', osv: 'OSV', poc: 'PoC-in-GitHub' }
 const memo = new Map() // complete answers, for back/forward and repeat searches
-async function lookup(id, onProgress = () => {}) {
+async function lookup(id, onProgress = () => {}, fresh = false) {
   const hit = memo.get(id)
-  if (hit && Date.now() - hit.t < 30 * 60e3) return hit.d
+  if (!fresh && hit && Date.now() - hit.t < 30 * 60e3) return hit.d
   const run = {} // source name -> promise, so a source can build on the others (Oracle does)
   for (const [k, fn] of Object.entries(SOURCES)) run[k] = Promise.resolve().then(() => fn(id, run)) // deferred: every key exists before any source starts
   const entries = await Promise.all(Object.entries(run).map(async ([k, p]) => {
@@ -616,7 +616,7 @@ function render(d) {
     <div class="sub">${best ? `${esc(best.source || '')}<br><code>${esc(best.vector || '')}</code>` : 'not scored yet'}</div></div>`)
   cards.push(`<div class="${tile(lvlEpss(ep?.epss))}"><div class="lbl">EPSS (exploit in next 30 days)</div><div class="val">${ep ? pct(ep.epss) : '<span class="empty">n/a</span>'}</div>
     <div class="sub">${ep ? `higher than ${pct(ep.percentile)} of CVEs · ${esc(ep.date)}` : S.epss?.ok ? 'no score yet' : esc(S.epss?.error)}</div>${ep ? `<div class="bar"><i style="width:${(ep.percentile * 100).toFixed(1)}%"></i></div>` : ''}</div>`)
-  cards.push(`<div class="${tile(kev ? (kev.listed ? 6 : 0) : null)}"><div class="lbl">CISA KEV</div><div class="val">${kev ? (kev.listed ? '<span style="color:var(--kev);font-weight:700">⚠ Exploited</span>' : '<span class="ok">Not listed</span>') : '<span class="empty">n/a</span>'}</div>
+  cards.push(`<div class="${tile(kev ? (kev.listed ? 6 : 0) : null)}"><div class="lbl">CISA KEV (exploited in the wild)</div><div class="val">${kev ? (kev.listed ? '<span style="color:var(--kev);font-weight:700">⚠ Exploited</span>' : '<span class="ok">Not listed</span>') : '<span class="empty">n/a</span>'}</div>
     <div class="sub">${kev ? `catalog ${esc(kev.catalog_version || '')}, ${kev.catalog_size} entries` : esc(S.kev?.error)}</div></div>`)
   cards.push(`<div class="${tile(poc?.total ? (poc.total >= 10 ? 5 : 4) : null)}"><div class="lbl">Public exploit code</div><div class="val">${poc?.total ? `${poc.total} <span style="font-size:13px">GitHub ${poc.total === 1 ? 'repo' : 'repos'}</span>` : `<span class="empty" style="font-size:15px">${S.poc?.ok ? 'none listed' : 'n/a'}</span>`}</div>
     <div class="sub">${poc?.total ? `top: ${esc(poc.repos[0].name)} (${poc.repos[0].stars}★)` : S.poc?.ok ? 'not in PoC-in-GitHub; exploits may still exist' : esc(S.poc?.error)}</div></div>`)
@@ -655,14 +655,19 @@ function render(d) {
       : nvd.cpes.map((c) => `<tr><td>${esc(c.vendor)}</td><td>${esc(c.product)}</td><td class="mono">${esc(c.versions || 'all')}</td></tr>`))}${!aff && nvd.cpes_total > nvd.cpes.length ? `<div class="meta">${nvd.cpes_total - nvd.cpes.length} more on NVD</div>` : ''}
     <div class="meta">${aff ? 'From the CNA record (CVE.org).' : 'From NVD CPE configurations.'}</div></section>`)
 
-  // distro status
+  // distro status. Each heading links to the vendor's own page for this CVE (or its errata site, if it has no page per CVE).
+  const cve = encodeURIComponent(d.id)
+  const vendorPage = { redhat: `https://access.redhat.com/security/cve/${cve}`, suse: `https://www.suse.com/security/cve/${cve}.html`, oracle: `https://linux.oracle.com/cve/${cve}.html`,
+    amazon: `https://explore.alas.aws.amazon.com/${cve}.html`, alma: 'https://errata.almalinux.org/', rocky: 'https://errata.rockylinux.org/',
+    azure: `https://msrc.microsoft.com/update-guide/vulnerability/${cve}`, ubuntu: `https://ubuntu.com/security/${cve}` }
+  const head = (key, text) => `<h2>${link(vendorPage[key], text)} ↗</h2>`
   const distro = []
   if (rh && (rh.fixed.length || rh.state.length)) {
     const rhRows = [
     ...rh.fixed.map((f) => ({ kind: 'fixed', text: `${f.product} ${f.package || ''} ${f.advisory || ''}`.toLowerCase(), html: `<tr><td>${esc(f.product)}</td><td class="mono">${esc(f.package || '')}</td><td class="ok nowrap">${f.advisory ? link(`https://access.redhat.com/errata/${f.advisory}`, f.advisory) : 'Fixed'} <span class="empty">${date(f.date)}</span></td></tr>` })),
     ...rh.state.map((s) => ({ kind: /not affected/i.test(s.state) ? 'notaff' : 'open', text: `${s.product} ${s.package || ''} ${s.state}`.toLowerCase(), html: `<tr><td>${esc(s.product)}</td><td class="mono">${esc(s.package || '')}</td><td class="${/not affected/i.test(s.state) ? 'ok' : /affected|deferred|fix/i.test(s.state) ? 'warn' : ''}">${esc(s.state)}</td></tr>` }))]
     const open = rhRows.filter((r) => r.kind === 'open').length, notaff = rhRows.filter((r) => r.kind === 'notaff').length
-    distro.push(`<section class="card"><h2>Red Hat (${rh.fixed.length} fixed, ${open} open, ${notaff} not affected)</h2>
+    distro.push(`<section class="card">${head('redhat', `Red Hat (${rh.fixed.length} fixed, ${open} open, ${notaff} not affected)`)}
     ${filterTable('rh', ['Product', 'Package', 'Status'], rhRows, 'Filter products or packages, e.g. RHEL 9, openshift, kernel',
       [['fixed', 'Fixed'], ['open', 'Affected / open'], ['notaff', 'Not affected']])}
     ${rh.statement ? `<details><summary>Red Hat statement</summary><p class="desc">${esc(rh.statement)}</p></details>` : ''}${rh.bugzilla ? `<div class="meta">${link(rh.bugzilla, 'Bugzilla')}</div>` : ''}</section>`)
@@ -673,33 +678,33 @@ function render(d) {
     const suRows = su.rows.map((r) => { const kind = kindOf(r.state); return { kind, text: `${r.product} ${r.package} ${r.state}`.toLowerCase(),
       html: `<tr><td title="${esc(r.product)}">${esc(cut(r.product))}</td><td class="mono">${esc(r.package)}</td><td class="${kind === 'open' ? 'warn' : kind === 'other' ? '' : 'ok'}">${esc(r.state)}</td></tr>` } })
     const n = (k) => suRows.filter((r) => r.kind === k).length
-    distro.push(`<section class="card"><h2>SUSE / SLES (${n('fixed')} fixed, ${n('open')} open, ${n('notaff')} not affected)</h2>
+    distro.push(`<section class="card">${head('suse', `SUSE / SLES (${n('fixed')} fixed, ${n('open')} open, ${n('notaff')} not affected)`)}
     ${su.state ? `<div class="meta" style="margin:-6px 0 6px">Overall state: ${esc(su.state)}</div>` : ''}
     ${suRows.length ? filterTable('su', ['Product', 'Source package', 'Status'], suRows, 'Filter products or packages, e.g. server 15 sp6, micro, kernel',
       [['fixed', 'Released / fixed'], ['open', 'Affected / in progress'], ['notaff', 'Not affected'], ['other', 'Unsupported / other']]) : ''}
     ${su.advisories.length ? `<div style="margin-top:10px;font-size:13px"><b>Advisories</b> (${su.advisories.length}): ${su.advisories.slice(0, 12).map((a) => link(a.url, a.id)).join(', ')}${su.advisories.length > 12 ? ` <span class="empty">+${su.advisories.length - 12} more on the SUSE page</span>` : ''}</div>` : ''}
     <div class="meta">From the SUSE CVE page: SUSE Linux Enterprise, openSUSE, cloud images and containers.</div></section>`)
   }
-  const errataCard = (name, x, note) => x && distro.push(`<section class="card"><h2>${name} (${x.errata.length} ${x.errata.length === 1 ? 'erratum' : 'errata'})</h2>${table(['Release', 'Erratum', 'Fixed packages'],
+  const errataCard = (key, x, note) => x && distro.push(`<section class="card">${head(key, `${LABEL[key]} (${x.errata.length} ${x.errata.length === 1 ? 'erratum' : 'errata'})`)}${table(['Release', 'Erratum', 'Fixed packages'],
     x.errata.map((e) => `<tr><td class="nowrap">${esc(e.platform)}</td><td class="ok nowrap">${link(e.url, e.id)} <span class="empty">${esc(e.severity)} ${date(e.date)}</span></td><td>${
       e.fixed.map((f) => `<span class="mono">${esc(f.version)}</span> <span class="empty">${esc(f.names.slice(0, 6).join(', '))}${f.names.length > 6 ? ` +${f.names.length - 6} more` : ''}</span>`).join('<br>') || esc(e.title)}</td></tr>`), 12)}
     <div class="meta">${note}</div></section>`)
-  errataCard('Oracle Linux', ol, 'Only errata that share a Red Hat, AlmaLinux or Rocky advisory number, or that NVD or CVE.org link to. Oracle-only errata (UEK kernel, Ksplice) and unfixed releases are not listed; see the Oracle Linux link below.')
-  if (am && am.rows.length) distro.push(`<section class="card"><h2>Amazon Linux</h2>${table(['Release', 'Package', 'Status'], am.rows.map((r) => {
+  errataCard('oracle', ol, 'Only errata that share a Red Hat, AlmaLinux or Rocky advisory number, or that NVD or CVE.org link to. Oracle-only errata (UEK kernel, Ksplice) and unfixed releases are not listed; see the Oracle Linux link below.')
+  if (am && am.rows.length) distro.push(`<section class="card">${head('amazon', 'Amazon Linux')}${table(['Release', 'Package', 'Status'], am.rows.map((r) => {
     const cls = /^(fixed|notaffected)$/i.test(r.status) ? 'ok' : /pending|affected|nofix|investigat/i.test(r.status) ? 'warn' : ''
     return `<tr><td class="nowrap">${esc(r.release)}</td><td class="mono">${esc(r.name)}</td><td class="${cls}">${esc(r.status.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase())} ${
       r.advisories.map((a) => `${link(a.url, a.id)} <span class="empty">${date(a.date)}</span>`).join(', ')}</td></tr>` }), 12)}
     <div class="meta">From the Amazon Linux Security Center.</div></section>`)
-  errataCard('AlmaLinux', al, 'Errata that OSV links to this CVE. Unfixed releases are not listed.')
-  errataCard('Rocky Linux', rk, 'Rocky errata found in OSV under the Red Hat or AlmaLinux advisory number. OSV lacks many Rocky errata, so a missing release does not mean it is unfixed.')
-  if (az) distro.push(`<section class="card"><h2>Azure Linux</h2>${az.rows.length ? table(['Release', 'Package', 'Status'], az.rows.map((r) =>
+  errataCard('alma', al, 'Errata that OSV links to this CVE. Unfixed releases are not listed.')
+  errataCard('rocky', rk, 'Rocky errata found in OSV under the Red Hat or AlmaLinux advisory number. OSV lacks many Rocky errata, so a missing release does not mean it is unfixed.')
+  if (az) distro.push(`<section class="card">${head('azure', 'Azure Linux')}${az.rows.length ? table(['Release', 'Package', 'Status'], az.rows.map((r) =>
     `<tr><td class="nowrap">${esc(r.release)}</td><td class="mono">${esc(r.name)}</td><td class="${r.fixed ? 'ok' : 'warn'}">${r.fixed ? `fixed in <span class="mono">${esc(r.fixed)}</span>` : r.last ? `no fix, affected up to <span class="mono">${esc(r.last)}</span>` : 'not fixed'} ${
       link(`https://osv.dev/vulnerability/${encodeURIComponent(r.id)}`, r.id)}</td></tr>`), 12) : ''}
     <div class="meta">${[az.searched.length ? `Searched OSV for Azure Linux packages: ${esc(az.searched.join(', '))}.` : '',
       az.skipped ? 'Kernel packages are not searched: OSV has no lookup by CVE and its Azure Linux kernel list is too large for a browser.' : '',
       az.truncated.length ? `Too many records to search fully: ${esc(az.truncated.join(', '))}.` : '',
       'Packages with another name on Azure Linux are missed; see the Microsoft MSRC link below.'].filter(Boolean).join(' ')}</div></section>`)
-  if (ub && ub.packages.length) distro.push(`<section class="card"><h2>Ubuntu</h2><div class="meta" style="margin:-6px 0 6px">Releases with a fix or a pending fix (via OSV). Unaffected releases are not listed; see the Ubuntu link below.${ub.notices.length ? ` USN: ${ub.notices.map(esc).join(', ')}.` : ''}</div>${table(['Package', 'Release', 'Status'],
+  if (ub && ub.packages.length) distro.push(`<section class="card">${head('ubuntu', 'Ubuntu')}<div class="meta" style="margin:-6px 0 6px">Releases with a fix or a pending fix (via OSV). Unaffected releases are not listed; see the Ubuntu link below.${ub.notices.length ? ` USN: ${ub.notices.map(esc).join(', ')}.` : ''}</div>${table(['Package', 'Release', 'Status'],
     ub.packages.flatMap((p) => p.statuses.map((s, i) => `<tr><td class="mono">${i ? '' : esc(p.name)}</td><td>${esc(s.release)}</td><td class="${s.status === 'released' || s.status === 'not-affected' ? 'ok' : s.status === 'needed' || s.status === 'needs-triage' || s.status === 'pending' ? 'warn' : ''}">${esc(s.status)} <span class="mono empty">${esc(s.version || '')}</span></td></tr>`)), 12)}
     ${ub.notes.length ? `<details><summary>Ubuntu notes</summary>${ub.notes.map((n) => `<p class="desc">${esc(n)}</p>`).join('')}</details>` : ''}</section>`)
   if (osv && (osv.rows.length || osv.related.length || osv.ghsa.length)) {
@@ -799,7 +804,7 @@ addEventListener('beforeprint', () => {
 })
 addEventListener('afterprint', () => { unfolded.forEach((el) => { el.open = false }); unfolded = [] })
 
-async function search(raw, push = true) {
+async function search(raw, push = true, fresh = false) { // fresh: skip the kept answer and ask the sources again
   const m = String(raw || '').match(CVE_RE)
   if (!m) { $('#out').innerHTML = '<div class="card empty">Enter a CVE id such as CVE-2024-3094.</div>'; return }
   const id = m[0].toUpperCase()
@@ -817,7 +822,7 @@ async function search(raw, push = true) {
     if (el) { el.className = r.ok ? 'done' : 'fail'; el.textContent = `${r.ok ? '●' : '✕'} ${label[k]}` }
   }
   try {
-    const d = await lookup(id, progress)
+    const d = await lookup(id, progress, fresh)
     if ($('#q').value.toUpperCase() !== id) return // a newer search started
     render(d)
     recent(id)
@@ -826,7 +831,7 @@ async function search(raw, push = true) {
   }
 }
 
-$('#f').addEventListener('submit', (e) => { e.preventDefault(); search($('#q').value) })
+$('#f').addEventListener('submit', (e) => { e.preventDefault(); search($('#q').value, true, true) }) // the Search button always re-queries
 $('#q').addEventListener('paste', (e) => {
   const t = e.clipboardData?.getData('text') || ''
   const m = t.match(CVE_RE)

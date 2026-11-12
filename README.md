@@ -67,7 +67,8 @@ Notes:
   searched (the list is several MB per page), and packages with another name on Azure Linux are missed.
 - The Ubuntu CVSS score is computed from the vector in OSV, which carries no number.
 - The KEV catalog (about 1.8 MB) is downloaded once and kept, compacted, in the browser's
-  localStorage for 12 hours. Complete answers are kept in memory for 30 minutes.
+  localStorage for 12 hours. Complete answers are kept in memory for 30 minutes, for
+  back/forward and the recent links; the Search button always queries the sources again.
 - NVD allows 5 requests per 30 seconds per IP address without an API key. That is plenty for
   searching by hand; a key cannot be used safely from a public page.
 - Red Hat's CDN caches the CORS header of the first site to fetch each CVE (no `Vary: Origin`), which
