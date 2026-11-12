@@ -304,6 +304,9 @@ async function srcCveorg(id) {
   const d = await getJson(`https://cveawg.mitre.org/api/cve/${id}`)
   const meta = d.cveMetadata || {}, cont = d.containers || {}, cna = cont.cna || {}
   const metrics = recordCvss(cna.metrics, meta.assignerShortName)
+  // some CNAs (Apache, for one) give a severity word and no CVSS
+  for (const m of cna.metrics || []) if (/severity/i.test(m.other?.type || '') && typeof m.other.content?.text === 'string')
+    metrics.push({ version: '', score: null, rating: m.other.content.text, vector: '', source: meta.assignerShortName, type: 'CNA' })
   const refs = (cna.references || []).map((r) => ({ url: r.url, tags: r.tags || [] }))
   let ssvc = null
   for (const adp of cont.adp || []) {
@@ -622,17 +625,27 @@ function render(d) {
   h.push(`<section class="card keep"><h2>Scores</h2><div class="grid">${cards.join('')}</div></section>`)
 
   // all CVSS metrics + weaknesses
-  const metrics = [...(nvd?.metrics || []).map((m) => ({ ...m, from: 'NVD' })), ...(org?.metrics || []).map((m) => ({ ...m, from: 'CVE.org' }))]
-  // vendor rows: the vendor's own CVSS where it publishes one, and its severity rating
+  const metrics = [...(nvd?.metrics || []).map((m) => ({ ...m, from: 'NVD', status: nvd.status })), ...(org?.metrics || []).map((m) => ({ ...m, from: 'CVE.org', status: org.state }))]
+  // NVD always gets a row, so a missing score is explained by its status
+  if (found && !nvd?.metrics?.length) metrics.unshift({ version: '', score: null, vector: '', source: 'NVD', from: 'NVD', status: nvd ? nvd.status || 'not scored' : S.nvd?.ok ? 'no record' : S.nvd?.error })
+  // CVE.org and every vendor always get a row too: without a score, the Status column says why
+  if (found && !org?.metrics?.length) metrics.splice(metrics.findIndex((m) => m.from !== 'NVD') >>> 0, 0,
+    { version: '', score: null, vector: '', source: 'CVE.org', from: 'CVE.org', status: org ? `${org.state || ''}, no score from the CNA`.replace(/^, /, '') : S.cveorg?.ok ? 'no record' : S.cveorg?.error })
   const ver = (vector) => (vector || '').match(/CVSS:(\d\.\d)/)?.[1] || ''
-  for (const [name, x] of [['Red Hat', rh && { score: rh.cvss3, vector: rh.vector, rating: rh.severity }], ['SUSE', su && { score: su.cvss, vector: su.vector, rating: su.severity }],
-    ['Oracle Linux', ol && { score: ol.cvss3, vector: ol.vector, rating: ol.severity }], ['Amazon Linux', am && { score: am.cvss3, vector: am.vector, rating: am.severity }],
-    ['AlmaLinux', al && { rating: al.severity }], ['Rocky Linux', rk && { rating: rk.severity }], ['Ubuntu', ub && { score: ub.cvss3, vector: ub.vector, rating: ub.priority && `${ub.priority} priority` }]])
-    if (x && (x.score != null || x.rating)) metrics.push({ ...x, version: ver(x.vector), source: name, from: name })
+  const count = (x) => `${x.errata.length} ${x.errata.length === 1 ? 'erratum' : 'errata'}`
+  if (found) for (const [key, x, none] of [
+    ['redhat', rh && { score: rh.cvss3, vector: rh.vector, rating: rh.severity }, 'no record'],
+    ['suse', su && { score: su.cvss, vector: su.vector, rating: su.severity, status: su.state }, 'no record'],
+    ['oracle', ol && { score: ol.cvss3, vector: ol.vector, rating: ol.severity, status: count(ol) }, 'no erratum matched'],
+    ['amazon', am && { score: am.cvss3, vector: am.vector, rating: am.severity }, 'no record'],
+    ['alma', al && { rating: al.severity, status: count(al) }, 'no erratum'],
+    ['rocky', rk && { rating: rk.severity, status: count(rk) }, 'no erratum found in OSV'],
+    ['ubuntu', ub && { score: ub.cvss3, vector: ub.vector, rating: ub.priority && `${ub.priority} priority`, status: ub.notices.length ? ub.notices.join(', ') : 'no USN' }, 'no record']])
+    metrics.push({ score: null, vector: '', ...(x || { status: S[key]?.ok ? none : S[key]?.error }), version: ver(x?.vector), source: LABEL[key], from: LABEL[key] })
   const cwes = [...new Set([...(nvd?.cwes || []), ...(org?.cwes || []), ...(rh?.cwe ? rh.cwe.match(/CWE-\d+/g) || [] : [])])]
   if (metrics.length || cwes.length) h.push(`<section class="card"><h2>All scores</h2>
-    ${metrics.length ? `<div class="scroll"><table><tr><th>Score</th><th>Rating</th><th>Version</th><th>Source</th><th>Vector</th></tr>
-    ${metrics.map((m) => `<tr><td>${chip(m.score, m.severity)}</td><td class="nowrap">${esc(m.rating || m.severity || (m.score != null ? band(m.score) : ''))}</td><td>${esc(m.version)}</td><td>${esc(m.source || '')} ${m.from === m.source ? '' : `<span class="empty">${esc(m.type || '')} via ${esc(m.from)}</span>`}</td><td><code>${esc(m.vector || '')}</code></td></tr>`).join('')}</table></div>` : ''}
+    ${metrics.length ? `<div class="scroll"><table><tr><th>Score</th><th>Rating</th><th>Version</th><th>Source</th><th>Status</th><th>Vector</th></tr>
+    ${metrics.map((m) => `<tr><td>${chip(m.score, m.severity)}</td><td class="nowrap">${esc(m.rating || m.severity || (m.score != null ? band(m.score) : ''))}</td><td>${esc(m.version)}</td><td>${esc(m.source || '')} ${m.from === m.source ? '' : `<span class="empty">${esc(m.type || '')} via ${esc(m.from)}</span>`}</td><td>${esc(m.status || '')}</td><td><code>${esc(m.vector || '')}</code></td></tr>`).join('')}</table></div>` : ''}
     ${cwes.length ? `<div style="margin-top:10px">Weakness: ${cwes.map((c) => link(`https://cwe.mitre.org/data/definitions/${c.replace('CWE-', '')}.html`, c)).join(', ')}</div>` : ''}</section>`)
 
   // affected products
