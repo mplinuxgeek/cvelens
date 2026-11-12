@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CVE Lens</title>
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src https://services.nvd.nist.gov https://cveawg.mitre.org https://api.first.org https://access.redhat.com https://api.osv.dev https://raw.githubusercontent.com; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src https://services.nvd.nist.gov https://cveawg.mitre.org https://api.first.org https://access.redhat.com https://www.suse.com https://explore.alas.aws.amazon.com https://api.osv.dev https://raw.githubusercontent.com; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Ccircle cx='13.5' cy='13.5' r='7.5' fill='none' stroke='%23fff' stroke-width='3.2'/%3E%3Cpath d='M19 19l6.5 6.5' stroke='%23fff' stroke-width='3.8' stroke-linecap='round'/%3E%3Ccircle cx='13.5' cy='13.5' r='2.8' fill='%23f97316'/%3E%3C/svg%3E">
 <style>
@@ -132,7 +132,7 @@ button.ghost:hover { border-color: var(--accent); }
 <body>
 <div class="wrap">
   <header>
-    <div class="brand"><h1>CVE Lens</h1><span>NVD · CVE.org · EPSS · CISA KEV · Red Hat · Ubuntu · OSV · PoC-in-GitHub, on one page</span></div>
+    <div class="brand"><h1>CVE Lens</h1><span>NVD · CVE.org · EPSS · CISA KEV · Red Hat · SUSE · Oracle · Amazon · AlmaLinux · Rocky · Azure Linux · Ubuntu · OSV · PoC-in-GitHub, on one page</span></div>
     <form id="f">
       <input id="q" type="search" placeholder="CVE-2024-3094, or paste any text containing a CVE id" autocomplete="off" autofocus>
       <button>Search</button>
@@ -142,7 +142,7 @@ button.ghost:hover { border-color: var(--accent); }
   </header>
   <main id="out"></main>
   <div id="toast" role="status" aria-live="polite"></div>
-  <footer>Your browser queries the public sources directly; only the CVE id is sent to them. The KEV catalog (CISA's GitHub copy) is kept in this browser for 12 hours. Ubuntu, Debian, Alpine and GitHub advisory data come from OSV. No server, no tracking.</footer>
+  <footer>Your browser queries the public sources directly; only the CVE id, its advisory numbers and its package names are sent to them. The KEV catalog (CISA's GitHub copy) is kept in this browser for 12 hours. Ubuntu, Debian, Alpine, AlmaLinux, Rocky Linux, Azure Linux and GitHub advisory data come from OSV. Rocky Linux and Azure Linux coverage is partial. Oracle Linux errata come from a GitHub copy of Oracle's OVAL data and cover only errata that share a Red Hat, AlmaLinux or Rocky advisory number, or that NVD or CVE.org link to. No server, no tracking.</footer>
 </div>
 <script>
 const CVE_RE = /CVE-\d{4}-\d{4,7}/i
@@ -154,7 +154,6 @@ const date = (s) => s ? String(s).slice(0, 10) : ''
 const band = (s) => s == null ? 'UNKNOWN' : s === 0 ? 'NONE' : s < 4 ? 'LOW' : s < 7 ? 'MEDIUM' : s < 9 ? 'HIGH' : 'CRITICAL'
 const chip = (score, sev) => score == null ? '<span class="empty">n/a</span>' : `<span class="chip ${esc((sev || band(score)).toUpperCase())}">${Number(score).toFixed(1)}</span>`
 const pct = (x, d = 1) => x == null ? 'n/a' : (x * 100).toFixed(x * 100 < 1 ? 2 : d) + '%'
-const sevWord = { critical: 'CRITICAL', important: 'HIGH', high: 'HIGH', moderate: 'MEDIUM', medium: 'MEDIUM', low: 'LOW', negligible: 'NONE' }
 const RECENT_KEY = 'cvelens.recent'
 
 function recent(add) {
@@ -233,10 +232,11 @@ function pickCvss(nvd, org, rh) {
 
 // ---------------------------------------------------------------- sources (queried from the browser)
 class NotFound extends Error {}
-async function getJson(url) {
+async function getJson(url) { return (await get(url, 'application/json')).json() }
+async function get(url, accept, body) {
   let r
   for (let attempt = 0; ; attempt++) {
-    try { r = await fetch(url, { headers: { Accept: 'application/json' }, referrerPolicy: 'no-referrer' }); break }
+    try { r = await fetch(url, { headers: { Accept: accept }, referrerPolicy: 'no-referrer', ...(body ? { method: 'POST', body } : {}) }); break }
     catch {
       // no readable response: network error, a browser extension blocking the host, or an error
       // reply without CORS headers (e.g. a CDN 5xx/403). Retry once, then report.
@@ -247,9 +247,24 @@ async function getJson(url) {
   if (r.status === 404) throw new NotFound(url)
   if (r.status === 403 || r.status === 429) throw new Error(`rate limited (HTTP ${r.status}), try again in 30 s`)
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
-  return r.json()
+  return r
 }
 const en = (ds) => (ds || []).find((d) => (d.lang || '').toLowerCase().startsWith('en'))?.value || ds?.[0]?.value || ''
+// CVSS 3.x base score from a vector string (Ubuntu's OSV record carries only the vector)
+function cvss3Score(vector) {
+  const m = Object.fromEntries((vector || '').split('/').slice(1).map((x) => x.split(':')))
+  const changed = m.S === 'C'
+  const w = { AV: { N: 0.85, A: 0.62, L: 0.55, P: 0.2 }, AC: { L: 0.77, H: 0.44 }, PR: changed ? { N: 0.85, L: 0.68, H: 0.5 } : { N: 0.85, L: 0.62, H: 0.27 },
+    UI: { N: 0.85, R: 0.62 }, C: { H: 0.56, L: 0.22, N: 0 }, I: { H: 0.56, L: 0.22, N: 0 }, A: { H: 0.56, L: 0.22, N: 0 } }
+  const v = Object.fromEntries(Object.keys(w).map((k) => [k, w[k][m[k]]]))
+  if (!/^CVSS:3\.[01]\//.test(vector || '') || !/^[UC]$/.test(m.S || '') || Object.values(v).some((x) => x == null)) return null
+  const iss = 1 - (1 - v.C) * (1 - v.I) * (1 - v.A)
+  const impact = changed ? 7.52 * (iss - 0.029) - 3.25 * (iss - 0.02) ** 15 : 6.42 * iss
+  if (impact <= 0) return 0
+  const raw = Math.min((changed ? 1.08 : 1) * (impact + 8.22 * v.AV * v.AC * v.PR * v.UI), 10)
+  const i = Math.round(raw * 100000)
+  return i % 10000 === 0 ? i / 100000 : (Math.floor(i / 10000) + 1) / 10
+}
 const num = (v) => (v == null || v === '' || isNaN(+v) ? null : +v)
 
 async function srcNvd(id) {
@@ -356,6 +371,146 @@ async function srcRedhat(id) {
     state: (d.package_state || []).map((p) => ({ product: p.product_name, package: p.package_name, state: p.fix_state })) }
 }
 
+// SUSE publishes no browser-readable JSON per CVE, but its CVE page allows cross-site requests. The
+// page is parsed as an inert document (nothing in it runs or loads) and only its text is used.
+async function srcSuse(id) {
+  // SUSE's "no such CVE" reply (404) has no CORS header, so the browser cannot tell it from a network error
+  const html = await (await get(`https://www.suse.com/security/cve/${id}.html`, 'text/html')
+    .catch((e) => { throw /no readable response/.test(e.message) ? new Error('no SUSE page for this CVE, or SUSE unreachable') : e })).text()
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const txt = (el) => (el?.textContent || '').replace(/\s+/g, ' ').trim()
+  const after = (re, tag) => { // first <tag> after the heading that matches re
+    let el = [...doc.querySelectorAll('h3')].find((h) => re.test(txt(h)))?.nextElementSibling
+    while (el && el.tagName !== tag && !/^H[1-4]$/.test(el.tagName)) el = el.nextElementSibling
+    return el?.tagName === tag ? el : null
+  }
+  const paras = [...doc.querySelectorAll('p')].map(txt)
+  const out = { state: paras.map((p) => p.match(/^Overall state of this security issue: (.+)$/)?.[1]).find(Boolean) || null,
+    severity: paras.map((p) => p.match(/rated as having (\w+) severity/)?.[1]).find(Boolean) || null,
+    cvss: null, version: null, vector: null, advisories: [], rows: [] }
+  // newest CVSS table that has a SUSE column
+  for (const tb of doc.querySelectorAll('table')) {
+    const ver = txt(tb.querySelector('caption')).match(/CVSS v(\d)/)?.[1]
+    const col = [...tb.querySelectorAll('tr:first-child th')].findIndex((th) => txt(th) === 'SUSE')
+    if (!ver || col < 0 || (out.version && ver < out.version[0])) continue
+    const cell = (label) => txt([...tb.querySelectorAll('tr')].find((tr) => txt(tr.children[0]) === label)?.children[col])
+    const score = num(cell('Base Score'))
+    if (score == null) continue
+    out.cvss = score
+    out.vector = cell('Vector')
+    out.version = out.vector.match(/^CVSS:(\d\.\d)/)?.[1] || ver + '.x'
+  }
+  for (const a of after(/^SUSE Security Advisories/, 'UL')?.querySelectorAll('li > a') || []) out.advisories.push({ id: txt(a), url: a.getAttribute('href') })
+  for (const tr of after(/^Status of this issue by product/, 'TABLE')?.querySelectorAll('tr') || []) {
+    const td = tr.querySelectorAll('td')
+    if (td.length !== 3) continue
+    td[0].querySelectorAll('br').forEach((br) => br.replaceWith(', '))
+    out.rows.push({ product: txt(td[0]).replace(/( ,)+/g, ','), package: txt(td[1]), state: txt(td[2]) })
+  }
+  if (!out.state && !out.severity && !out.rows.length) throw new NotFound(id)
+  return out
+}
+
+// Oracle Linux: linux.oracle.com sends no CORS header and OSV has no Oracle data. Oracle errata that
+// rebuild a Red Hat update keep its number (RHSA-2024:4312 = ELSA-2024-4312), and so do AlmaLinux and
+// Rocky. Those numbers, plus ELSA links in the NVD and CVE.org references, are looked up in the
+// aquasecurity/vuln-list copy of Oracle's OVAL data and kept only if the erratum names this CVE.
+// Oracle-only errata (UEK kernels, Ksplice) that nothing links to are missed.
+async function srcOracle(id, run) {
+  const [rh, osv, nvd, org] = await Promise.all(['redhat', 'osv', 'nvd', 'cveorg'].map((k) => Promise.resolve(run?.[k]).catch(() => null)))
+  const cand = new Set()
+  for (const f of rh?.fixed || []) if (/Enterprise Linux/.test(f.product || '')) cand.add((f.advisory || '').replace(/^RHSA-(\d{4}):(\d+)$/, 'ELSA-$1-$2'))
+  for (const r of osv?.related || []) cand.add(r.replace(/^(?:ALSA|RLSA)-(\d{4}):(\d+)$/, 'ELSA-$1-$2'))
+  for (const r of [...(nvd?.references || []), ...(org?.references || [])]) cand.add((r.url || '').match(/ELSA-\d{4}-\d+/)?.[0])
+  const ids = [...cand].filter((x) => /^ELSA-\d{4}-\d+$/.test(x || '')).sort().reverse().slice(0, 16)
+  const errata = (await Promise.all(ids.map(async (e) => {
+    const d = await getJson(`https://raw.githubusercontent.com/aquasecurity/vuln-list/main/oval/oracle/${e.slice(5, 9)}/${e}.json`)
+      .catch((err) => { if (err instanceof NotFound) return null; throw err })
+    if (!d || !(d.Cves || []).some((c) => c.ID === id)) return null
+    const pk = new Map() // fixed version -> package names
+    const walk = (c) => {
+      for (const x of c?.Criterions || []) { const m = (x.Comment || '').match(/^(\S+) is earlier than (?:\d+:)?(\S+)$/); if (m) pk.set(m[2], (pk.get(m[2]) || new Set()).add(m[1])) }
+      for (const x of c?.Criterias || []) walk(x)
+    }
+    walk(d.Criteria)
+    return { id: e, url: `https://linux.oracle.com/errata/${e}.html`, cvss: (d.Cves.find((c) => c.ID === id).CVSS3 || '').match(/^([\d.]+)\/(CVSS:\S+)$/), severity: (d.Severity || '').toLowerCase(), platform: (d.Platform || []).join(', '), date: d.Issued?.Date || '',
+      title: (d.Title || '').replace(/^ELSA-[\d-]+:\s*/, ''), fixed: [...pk].map(([version, names]) => ({ version, names: [...names] })) }
+  }))).filter(Boolean)
+  if (!errata.length) throw new NotFound(id)
+  const cvss = errata.find((e) => e.cvss)?.cvss
+  return { errata: byRelease(errata), severity: worst(errata), cvss3: cvss ? num(cvss[1]) : null, vector: cvss?.[2] || null }
+}
+const byRelease = (errata) => errata.sort((a, b) => a.platform.localeCompare(b.platform, 'en', { numeric: true }) || a.id.localeCompare(b.id))
+const worst = (errata) => { // highest severity word among errata
+  const rank = { critical: 4, important: 3, moderate: 2, low: 1 }
+  return [...errata].sort((a, b) => (rank[b.severity] || 0) - (rank[a.severity] || 0))[0]?.severity || null
+}
+
+// Amazon Linux publishes one JSON file per CVE, readable from any site.
+async function srcAmazon(id) {
+  const d = await getJson(`https://explore.alas.aws.amazon.com/${id}.json`)
+  const s = (d.scores || []).find((x) => x.source === 'AMAZON_LINUX' && /^CVSSv3/.test(x.type || ''))
+  const release = { amzn1: 'Amazon Linux 1', amzn2: 'Amazon Linux 2', amzn2023: 'Amazon Linux 2023' }
+  return { severity: d.severity || null, cvss3: num(s?.score), vector: s?.vector || null,
+    rows: (d.affected_packages || []).map((a) => ({ release: (release[a.platform] || a.platform || '') + (a.opt_in_repo ? ` (${a.opt_in_repo})` : ''), name: a.name || '',
+      status: a.status || '', advisories: (a.advisories || []).map((x) => ({ id: x.id, url: x.url, date: x.release_date })) })) }
+}
+
+// AlmaLinux and Rocky Linux errata, from their OSV records. Kept only if the record names this CVE.
+async function osvErrata(ids, id, url) {
+  const errata = (await Promise.all(ids.map(async (e) => {
+    const d = await getJson(`https://api.osv.dev/v1/vulns/${encodeURIComponent(e)}`).catch((err) => { if (err instanceof NotFound) return null; throw err })
+    if (!d || ![...(d.upstream || []), ...(d.related || []), ...(d.aliases || [])].includes(id)) return null
+    const pk = new Map(), rel = new Set() // fixed version -> package names
+    for (const a of d.affected || []) {
+      rel.add((a.package?.ecosystem || '').replace(':', ' '))
+      const v = (a.ranges || []).flatMap((r) => r.events || []).find((x) => x.fixed)?.fixed?.replace(/^\d+:/, '')
+      if (v && a.package?.name) pk.set(v, (pk.get(v) || new Set()).add(a.package.name))
+    }
+    const platform = [...rel].filter(Boolean).join(', ')
+    return { id: e, url: url(e, platform.match(/\d+/)?.[0] || ''), severity: ((d.summary || '').match(/^(\w+):/)?.[1] || '').toLowerCase(), platform, date: d.published || '',
+      title: d.summary || '', fixed: [...pk].map(([version, names]) => ({ version, names: [...names] })) }
+  }))).filter(Boolean)
+  if (!errata.length) throw new NotFound(id)
+  return { errata: byRelease(errata), severity: worst(errata) }
+}
+async function srcAlma(id, run) {
+  const ids = ((await run.osv).related || []).filter((r) => r.startsWith('ALSA-'))
+  return osvErrata(ids.slice(0, 16), id, (e, ver) => `https://errata.almalinux.org/${ver}/${e.replace(':', '-')}.html`)
+}
+// OSV's CVE records do not list Rocky errata, and Rocky's own API has no CORS header. Rocky reuses the
+// Red Hat advisory number, so the page tries the Red Hat and AlmaLinux numbers. OSV lacks many Rocky errata.
+async function srcRocky(id, run) {
+  const [rh, osv] = await Promise.all(['redhat', 'osv'].map((k) => Promise.resolve(run?.[k]).catch(() => null)))
+  const cand = new Set()
+  for (const f of rh?.fixed || []) if (/Enterprise Linux/.test(f.product || '')) cand.add((f.advisory || '').replace(/^RHSA-/, 'RLSA-'))
+  for (const r of osv?.related || []) cand.add(r.replace(/^ALSA-/, 'RLSA-'))
+  return osvErrata([...cand].filter((x) => /^RLSA-\d{4}:\d+$/.test(x)).sort().reverse().slice(0, 16), id, (e) => `https://errata.rockylinux.org/${e}`)
+}
+
+// Azure Linux (CBL-Mariner): Microsoft's data is in OSV, but OSV cannot be searched by CVE and MSRC has no
+// CORS header. The page asks OSV for every Azure Linux record of the packages that Amazon and Red Hat name
+// for this CVE, and keeps the records for this CVE. The kernel list is several MB per page, so it is skipped.
+async function srcAzure(id, run) {
+  const [rh, am] = await Promise.all(['redhat', 'amazon'].map((k) => Promise.resolve(run?.[k]).catch(() => null)))
+  const all = [...new Set([...(am?.rows || []).map((r) => r.name), ...(rh?.state || []).map((s) => s.package), ...(rh?.fixed || []).map((f) => (f.package || '').replace(/-\d+:.*$/, ''))]
+    .filter((n) => /^[\w.+-]+$/.test(n || '')))]
+  const skipped = all.filter((n) => /^kernel/.test(n)), names = all.filter((n) => !/^kernel/.test(n)).slice(0, 4)
+  const rows = [], truncated = []
+  await Promise.all(names.map(async (name) => {
+    const d = await (await get('https://api.osv.dev/v1/query', 'application/json', JSON.stringify({ package: { name, ecosystem: 'Azure Linux' } }))).json()
+    const hits = (d.vulns || []).filter((v) => (v.upstream || []).includes(id))
+    if (!hits.length && d.next_page_token) truncated.push(name)
+    for (const v of hits) for (const a of v.affected || []) {
+      const ev = (a.ranges || []).flatMap((r) => r.events || [])
+      rows.push({ id: v.id, release: (a.package?.ecosystem || '').replace(':', ' '), name: a.package?.name || name, fixed: ev.find((e) => e.fixed)?.fixed, last: ev.find((e) => e.last_affected)?.last_affected })
+    }
+  }))
+  if (!rows.length && !skipped.length && !truncated.length) throw new NotFound(id)
+  rows.sort((a, b) => a.release.localeCompare(b.release) || a.name.localeCompare(b.name))
+  return { rows, skipped: skipped.length > 0, truncated, searched: names }
+}
+
 // Ubuntu via OSV (ubuntu.com sends no CORS header). OSV lists releases with a fix or pending fix only.
 async function srcUbuntu(id) {
   const d = await getJson(`https://api.osv.dev/v1/vulns/UBUNTU-${id}`)
@@ -366,7 +521,8 @@ async function srcUbuntu(id) {
     if (!pk.has(name)) pk.set(name, [])
     pk.get(name).push({ release: (a.package?.ecosystem || '').replace(/^Ubuntu:/, ''), status: fixed ? 'released' : 'needed', version: fixed || '' })
   }
-  return { priority: (d.severity || []).find((s) => s.type === 'Ubuntu')?.score || null, cvss3: null, description: d.details || '', notes: [],
+  const vector = (d.severity || []).find((s) => s.type === 'CVSS_V3')?.score || null
+  return { priority: (d.severity || []).find((s) => s.type === 'Ubuntu')?.score || null, cvss3: cvss3Score(vector), vector, description: d.details || '', notes: [],
     notices: (d.related || []).filter((r) => r.startsWith('USN-')), packages: [...pk].map(([name, statuses]) => ({ name, statuses })).slice(0, 30) }
 }
 
@@ -403,15 +559,17 @@ async function srcPoc(id) {
   return { total: repos.length, repos: repos.slice(0, 100) }
 }
 
-const SOURCES = { nvd: srcNvd, cveorg: srcCveorg, epss: srcEpss, kev: srcKev, redhat: srcRedhat, ubuntu: srcUbuntu, osv: srcOsv, poc: srcPoc }
-const LABEL = { nvd: 'NVD', cveorg: 'CVE.org', epss: 'EPSS', kev: 'KEV', redhat: 'Red Hat', ubuntu: 'Ubuntu', osv: 'OSV', poc: 'PoC-in-GitHub' }
+const SOURCES = { nvd: srcNvd, cveorg: srcCveorg, epss: srcEpss, kev: srcKev, redhat: srcRedhat, suse: srcSuse, oracle: srcOracle, amazon: srcAmazon, alma: srcAlma, rocky: srcRocky, azure: srcAzure, ubuntu: srcUbuntu, osv: srcOsv, poc: srcPoc }
+const LABEL = { nvd: 'NVD', cveorg: 'CVE.org', epss: 'EPSS', kev: 'KEV', redhat: 'Red Hat', suse: 'SUSE', oracle: 'Oracle Linux', amazon: 'Amazon Linux', alma: 'AlmaLinux', rocky: 'Rocky Linux', azure: 'Azure Linux', ubuntu: 'Ubuntu', osv: 'OSV', poc: 'PoC-in-GitHub' }
 const memo = new Map() // complete answers, for back/forward and repeat searches
 async function lookup(id, onProgress = () => {}) {
   const hit = memo.get(id)
   if (hit && Date.now() - hit.t < 30 * 60e3) return hit.d
-  const entries = await Promise.all(Object.entries(SOURCES).map(async ([k, fn]) => {
+  const run = {} // source name -> promise, so a source can build on the others (Oracle does)
+  for (const [k, fn] of Object.entries(SOURCES)) run[k] = Promise.resolve().then(() => fn(id, run)) // deferred: every key exists before any source starts
+  const entries = await Promise.all(Object.entries(run).map(async ([k, p]) => {
     let res
-    try { res = [k, { ok: true, data: await fn(id) }] }
+    try { res = [k, { ok: true, data: await p }] }
     catch (e) { res = [k, e instanceof NotFound ? { ok: true, data: null } : { ok: false, error: e.message || String(e) }] }
     onProgress(k, res[1])
     return res
@@ -423,8 +581,8 @@ async function lookup(id, onProgress = () => {}) {
 
 function render(d) {
   const S = d.sources, g = (k) => (S[k]?.ok ? S[k].data : null)
-  const nvd = g('nvd'), org = g('cveorg'), ep = g('epss'), kev = g('kev'), rh = g('redhat'), ub = g('ubuntu'), osv = g('osv'), poc = g('poc')
-  const found = nvd || org || rh || ub || osv
+  const nvd = g('nvd'), org = g('cveorg'), ep = g('epss'), kev = g('kev'), rh = g('redhat'), su = g('suse'), ol = g('oracle'), am = g('amazon'), al = g('alma'), rk = g('rocky'), az = g('azure'), ub = g('ubuntu'), osv = g('osv'), poc = g('poc')
+  const found = nvd || org || rh || su || am || ub || osv
   afterRender.length = 0
   const h = []
   const best = pickCvss(nvd, org, rh)
@@ -449,7 +607,6 @@ function render(d) {
   const cards = []
   const lvlScore = (x) => x == null || isNaN(x) ? null : x >= 9 ? 6 : x >= 8 ? 5 : x >= 7 ? 4 : x >= 5.5 ? 3 : x >= 4 ? 2 : x > 0 ? 1 : 0
   const lvlEpss = (x) => x == null ? null : x >= 0.5 ? 6 : x >= 0.2 ? 5 : x >= 0.05 ? 4 : x >= 0.01 ? 3 : x >= 0.001 ? 2 : 1
-  const lvlWord = (w) => ({ critical: 6, important: 5, high: 5, moderate: 3, medium: 3, low: 1, negligible: 0 })[(w || '').toLowerCase()] ?? null
   const lvlSsvc = (v) => !v ? null : v.Exploitation === 'active' ? 6 : v.Exploitation === 'poc' ? 4 : v.Automatable === 'yes' ? 3 : 1
   const tile = (lvl) => `stat copyable${lvl == null ? '' : ' t' + lvl}" title="Click to copy`
   cards.push(`<div class="${tile(lvlScore(best?.score))}"><div class="lbl">CVSS ${best ? esc(best.version) : ''}</div><div class="val">${chip(best?.score, best?.severity)}${best ? `<span style="font-size:13px">${esc(best.severity || band(best.score))}</span>` : ''}</div>
@@ -458,10 +615,6 @@ function render(d) {
     <div class="sub">${ep ? `higher than ${pct(ep.percentile)} of CVEs · ${esc(ep.date)}` : S.epss?.ok ? 'no score yet' : esc(S.epss?.error)}</div>${ep ? `<div class="bar"><i style="width:${(ep.percentile * 100).toFixed(1)}%"></i></div>` : ''}</div>`)
   cards.push(`<div class="${tile(kev ? (kev.listed ? 6 : 0) : null)}"><div class="lbl">CISA KEV</div><div class="val">${kev ? (kev.listed ? '<span style="color:var(--kev);font-weight:700">⚠ Exploited</span>' : '<span class="ok">Not listed</span>') : '<span class="empty">n/a</span>'}</div>
     <div class="sub">${kev ? `catalog ${esc(kev.catalog_version || '')}, ${kev.catalog_size} entries` : esc(S.kev?.error)}</div></div>`)
-  cards.push(`<div class="${tile(rh ? lvlWord(rh.severity) ?? lvlScore(rh.cvss3) : null)}"><div class="lbl">Red Hat</div><div class="val">${rh ? `${chip(rh.cvss3, sevWord[(rh.severity || '').toLowerCase()])}<span style="font-size:13px">${esc(rh.severity || '')}</span>` : '<span class="empty">n/a</span>'}</div>
-    <div class="sub">${rh ? `<code>${esc(rh.vector || '')}</code>` : S.redhat?.ok ? 'no Red Hat record' : esc(S.redhat?.error)}</div></div>`)
-  cards.push(`<div class="${tile(ub ? lvlWord(ub.priority) ?? lvlScore(ub.cvss3) : null)}"><div class="lbl">Ubuntu priority</div><div class="val">${ub ? `${ub.cvss3 != null ? chip(ub.cvss3) : ''}<span style="font-size:15px">${esc(ub.priority || 'n/a')}</span>` : '<span class="empty">n/a</span>'}</div>
-    <div class="sub">${ub ? (ub.notices.length ? 'USN: ' + ub.notices.map(esc).join(', ') : 'no USN yet') : S.ubuntu?.ok ? 'no Ubuntu record' : esc(S.ubuntu?.error)}</div></div>`)
   cards.push(`<div class="${tile(poc?.total ? (poc.total >= 10 ? 5 : 4) : null)}"><div class="lbl">Public exploit code</div><div class="val">${poc?.total ? `${poc.total} <span style="font-size:13px">GitHub ${poc.total === 1 ? 'repo' : 'repos'}</span>` : `<span class="empty" style="font-size:15px">${S.poc?.ok ? 'none listed' : 'n/a'}</span>`}</div>
     <div class="sub">${poc?.total ? `top: ${esc(poc.repos[0].name)} (${poc.repos[0].stars}★)` : S.poc?.ok ? 'not in PoC-in-GitHub; exploits may still exist' : esc(S.poc?.error)}</div></div>`)
   if (org?.ssvc) cards.push(`<div class="${tile(lvlSsvc(org.ssvc))}"><div class="lbl">CISA SSVC</div><div class="sub" style="font-size:13px;color:var(--fg);margin-top:6px">
@@ -470,11 +623,16 @@ function render(d) {
 
   // all CVSS metrics + weaknesses
   const metrics = [...(nvd?.metrics || []).map((m) => ({ ...m, from: 'NVD' })), ...(org?.metrics || []).map((m) => ({ ...m, from: 'CVE.org' }))]
-  if (rh?.cvss3 != null) metrics.push({ version: (rh.vector || '').match(/CVSS:(\d\.\d)/)?.[1] || '3', score: rh.cvss3, vector: rh.vector, source: 'Red Hat', from: 'Red Hat' })
+  // vendor rows: the vendor's own CVSS where it publishes one, and its severity rating
+  const ver = (vector) => (vector || '').match(/CVSS:(\d\.\d)/)?.[1] || ''
+  for (const [name, x] of [['Red Hat', rh && { score: rh.cvss3, vector: rh.vector, rating: rh.severity }], ['SUSE', su && { score: su.cvss, vector: su.vector, rating: su.severity }],
+    ['Oracle Linux', ol && { score: ol.cvss3, vector: ol.vector, rating: ol.severity }], ['Amazon Linux', am && { score: am.cvss3, vector: am.vector, rating: am.severity }],
+    ['AlmaLinux', al && { rating: al.severity }], ['Rocky Linux', rk && { rating: rk.severity }], ['Ubuntu', ub && { score: ub.cvss3, vector: ub.vector, rating: ub.priority && `${ub.priority} priority` }]])
+    if (x && (x.score != null || x.rating)) metrics.push({ ...x, version: ver(x.vector), source: name, from: name })
   const cwes = [...new Set([...(nvd?.cwes || []), ...(org?.cwes || []), ...(rh?.cwe ? rh.cwe.match(/CWE-\d+/g) || [] : [])])]
   if (metrics.length || cwes.length) h.push(`<section class="card"><h2>All scores</h2>
-    ${metrics.length ? `<div class="scroll"><table><tr><th>Score</th><th>Version</th><th>Source</th><th>Vector</th></tr>
-    ${metrics.map((m) => `<tr><td>${chip(m.score, m.severity)}</td><td>${esc(m.version)}</td><td>${esc(m.source || '')} <span class="empty">${esc(m.type || '')} via ${esc(m.from)}</span></td><td><code>${esc(m.vector || '')}</code></td></tr>`).join('')}</table></div>` : ''}
+    ${metrics.length ? `<div class="scroll"><table><tr><th>Score</th><th>Rating</th><th>Version</th><th>Source</th><th>Vector</th></tr>
+    ${metrics.map((m) => `<tr><td>${chip(m.score, m.severity)}</td><td class="nowrap">${esc(m.rating || m.severity || (m.score != null ? band(m.score) : ''))}</td><td>${esc(m.version)}</td><td>${esc(m.source || '')} ${m.from === m.source ? '' : `<span class="empty">${esc(m.type || '')} via ${esc(m.from)}</span>`}</td><td><code>${esc(m.vector || '')}</code></td></tr>`).join('')}</table></div>` : ''}
     ${cwes.length ? `<div style="margin-top:10px">Weakness: ${cwes.map((c) => link(`https://cwe.mitre.org/data/definitions/${c.replace('CWE-', '')}.html`, c)).join(', ')}</div>` : ''}</section>`)
 
   // affected products
@@ -496,12 +654,44 @@ function render(d) {
       [['fixed', 'Fixed'], ['open', 'Affected / open'], ['notaff', 'Not affected']])}
     ${rh.statement ? `<details><summary>Red Hat statement</summary><p class="desc">${esc(rh.statement)}</p></details>` : ''}${rh.bugzilla ? `<div class="meta">${link(rh.bugzilla, 'Bugzilla')}</div>` : ''}</section>`)
   }
-  if (ub && ub.packages.length) distro.push(`<section class="card"><h2>Ubuntu</h2><div class="meta" style="margin:-6px 0 6px">Releases with a fix or a pending fix (via OSV). Unaffected releases are not listed; see the Ubuntu link below.</div>${table(['Package', 'Release', 'Status'],
+  if (su && (su.rows.length || su.advisories.length)) {
+    const kindOf = (s) => /^(released|already fixed)$/i.test(s) ? 'fixed' : /^not affected$/i.test(s) ? 'notaff' : /affected|progress|pending|analysis|ignore/i.test(s) ? 'open' : 'other'
+    const cut = (s) => s.length > 160 ? s.slice(0, 160) + '…' : s
+    const suRows = su.rows.map((r) => { const kind = kindOf(r.state); return { kind, text: `${r.product} ${r.package} ${r.state}`.toLowerCase(),
+      html: `<tr><td title="${esc(r.product)}">${esc(cut(r.product))}</td><td class="mono">${esc(r.package)}</td><td class="${kind === 'open' ? 'warn' : kind === 'other' ? '' : 'ok'}">${esc(r.state)}</td></tr>` } })
+    const n = (k) => suRows.filter((r) => r.kind === k).length
+    distro.push(`<section class="card"><h2>SUSE / SLES (${n('fixed')} fixed, ${n('open')} open, ${n('notaff')} not affected)</h2>
+    ${su.state ? `<div class="meta" style="margin:-6px 0 6px">Overall state: ${esc(su.state)}</div>` : ''}
+    ${suRows.length ? filterTable('su', ['Product', 'Source package', 'Status'], suRows, 'Filter products or packages, e.g. server 15 sp6, micro, kernel',
+      [['fixed', 'Released / fixed'], ['open', 'Affected / in progress'], ['notaff', 'Not affected'], ['other', 'Unsupported / other']]) : ''}
+    ${su.advisories.length ? `<div style="margin-top:10px;font-size:13px"><b>Advisories</b> (${su.advisories.length}): ${su.advisories.slice(0, 12).map((a) => link(a.url, a.id)).join(', ')}${su.advisories.length > 12 ? ` <span class="empty">+${su.advisories.length - 12} more on the SUSE page</span>` : ''}</div>` : ''}
+    <div class="meta">From the SUSE CVE page: SUSE Linux Enterprise, openSUSE, cloud images and containers.</div></section>`)
+  }
+  const errataCard = (name, x, note) => x && distro.push(`<section class="card"><h2>${name} (${x.errata.length} ${x.errata.length === 1 ? 'erratum' : 'errata'})</h2>${table(['Release', 'Erratum', 'Fixed packages'],
+    x.errata.map((e) => `<tr><td class="nowrap">${esc(e.platform)}</td><td class="ok nowrap">${link(e.url, e.id)} <span class="empty">${esc(e.severity)} ${date(e.date)}</span></td><td>${
+      e.fixed.map((f) => `<span class="mono">${esc(f.version)}</span> <span class="empty">${esc(f.names.slice(0, 6).join(', '))}${f.names.length > 6 ? ` +${f.names.length - 6} more` : ''}</span>`).join('<br>') || esc(e.title)}</td></tr>`), 12)}
+    <div class="meta">${note}</div></section>`)
+  errataCard('Oracle Linux', ol, 'Only errata that share a Red Hat, AlmaLinux or Rocky advisory number, or that NVD or CVE.org link to. Oracle-only errata (UEK kernel, Ksplice) and unfixed releases are not listed; see the Oracle Linux link below.')
+  if (am && am.rows.length) distro.push(`<section class="card"><h2>Amazon Linux</h2>${table(['Release', 'Package', 'Status'], am.rows.map((r) => {
+    const cls = /^(fixed|notaffected)$/i.test(r.status) ? 'ok' : /pending|affected|nofix|investigat/i.test(r.status) ? 'warn' : ''
+    return `<tr><td class="nowrap">${esc(r.release)}</td><td class="mono">${esc(r.name)}</td><td class="${cls}">${esc(r.status.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase())} ${
+      r.advisories.map((a) => `${link(a.url, a.id)} <span class="empty">${date(a.date)}</span>`).join(', ')}</td></tr>` }), 12)}
+    <div class="meta">From the Amazon Linux Security Center.</div></section>`)
+  errataCard('AlmaLinux', al, 'Errata that OSV links to this CVE. Unfixed releases are not listed.')
+  errataCard('Rocky Linux', rk, 'Rocky errata found in OSV under the Red Hat or AlmaLinux advisory number. OSV lacks many Rocky errata, so a missing release does not mean it is unfixed.')
+  if (az) distro.push(`<section class="card"><h2>Azure Linux</h2>${az.rows.length ? table(['Release', 'Package', 'Status'], az.rows.map((r) =>
+    `<tr><td class="nowrap">${esc(r.release)}</td><td class="mono">${esc(r.name)}</td><td class="${r.fixed ? 'ok' : 'warn'}">${r.fixed ? `fixed in <span class="mono">${esc(r.fixed)}</span>` : r.last ? `no fix, affected up to <span class="mono">${esc(r.last)}</span>` : 'not fixed'} ${
+      link(`https://osv.dev/vulnerability/${encodeURIComponent(r.id)}`, r.id)}</td></tr>`), 12) : ''}
+    <div class="meta">${[az.searched.length ? `Searched OSV for Azure Linux packages: ${esc(az.searched.join(', '))}.` : '',
+      az.skipped ? 'Kernel packages are not searched: OSV has no lookup by CVE and its Azure Linux kernel list is too large for a browser.' : '',
+      az.truncated.length ? `Too many records to search fully: ${esc(az.truncated.join(', '))}.` : '',
+      'Packages with another name on Azure Linux are missed; see the Microsoft MSRC link below.'].filter(Boolean).join(' ')}</div></section>`)
+  if (ub && ub.packages.length) distro.push(`<section class="card"><h2>Ubuntu</h2><div class="meta" style="margin:-6px 0 6px">Releases with a fix or a pending fix (via OSV). Unaffected releases are not listed; see the Ubuntu link below.${ub.notices.length ? ` USN: ${ub.notices.map(esc).join(', ')}.` : ''}</div>${table(['Package', 'Release', 'Status'],
     ub.packages.flatMap((p) => p.statuses.map((s, i) => `<tr><td class="mono">${i ? '' : esc(p.name)}</td><td>${esc(s.release)}</td><td class="${s.status === 'released' || s.status === 'not-affected' ? 'ok' : s.status === 'needed' || s.status === 'needs-triage' || s.status === 'pending' ? 'warn' : ''}">${esc(s.status)} <span class="mono empty">${esc(s.version || '')}</span></td></tr>`)), 12)}
     ${ub.notes.length ? `<details><summary>Ubuntu notes</summary>${ub.notes.map((n) => `<p class="desc">${esc(n)}</p>`).join('')}</details>` : ''}</section>`)
   if (osv && (osv.rows.length || osv.related.length || osv.ghsa.length)) {
-    const groupOf = (r) => /^(open)?SUSE-/i.test(r) ? 'SUSE / openSUSE' : r.startsWith('ALSA-') ? 'AlmaLinux' : r.startsWith('RLSA-') ? 'Rocky Linux'
-      : /^(DSA|DLA)-/.test(r) ? 'Debian' : r.startsWith('USN-') ? null : 'Other'
+    const groupOf = (r) => /^(open)?SUSE-/i.test(r) ? 'SUSE / openSUSE' : /^(DSA|DLA)-/.test(r) ? 'Debian'
+      : /^(USN|ALSA|RLSA)-/.test(r) ? null : 'Other' // Ubuntu, AlmaLinux and Rocky have their own sections
     const groups = {}
     for (const r of osv.related) { const gname = groupOf(r); if (gname) (groups[gname] ||= []).push(r) }
     const osvLink = (x) => link(`https://osv.dev/vulnerability/${encodeURIComponent(x)}`, x)
