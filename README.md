@@ -18,6 +18,15 @@ Serve it over HTTP(S); opening it straight from disk (`file://`) is untested.
 Link to a CVE with `?q=CVE-2024-3094`. Paste any text containing a CVE id into the search box to
 pick the id out of it. Press `/` to focus the search box.
 
+Search several CVEs at once by separating them with commas (or pasting text that contains more than
+one id), or link to `?q=CVE-2024-3094,CVE-2021-44228`. The page then shows a summary table, one row
+per CVE: package, CVSS score and rating, EPSS, CISA KEV, public exploit code and publish date. Package names come
+from Red Hat, else from the CNA's affected products, else from NVD's CPEs. It asks only NVD, CVE.org, EPSS,
+KEV, Red Hat and PoC-in-GitHub, and looks up at most 50 CVEs. NVD allows 5 requests per 30 seconds
+without an API key, so the page paces its NVD requests and long lists fill in slowly. Click a column
+heading to sort, or a CVE to open its full page. **Export CSV** downloads the table in its current
+order, with every package name, the full summary, the CVSS vector and the raw EPSS values.
+
 **Export PDF** opens the browser's print dialog; choose "Save as PDF". The printout is always light,
 keeps the severity colours, and includes folded table rows (but not the full exploit repository list).
 

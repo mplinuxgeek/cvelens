@@ -100,6 +100,7 @@ button.ghost:hover { border-color: var(--accent); }
 .caution { border-left: 3px solid var(--high); padding: 4px 10px; margin: 0 0 10px; font-size: 13px; }
 .print-only { display: none; }
 .copyable { cursor: pointer; }
+th.sortable { cursor: pointer; user-select: none; } th.sortable:hover { color: var(--fg); }
 .title h2.copyable:hover { color: var(--accent); }
 .stat.copyable:hover { outline: 2px solid color-mix(in srgb, var(--tc, var(--accent)) 50%, transparent); outline-offset: 1px; }
 .stat.copied, h2.copied { outline: 2px solid var(--ok) !important; outline-offset: 1px; }
@@ -134,7 +135,7 @@ button.ghost:hover { border-color: var(--accent); }
   <header>
     <div class="brand"><h1>CVE Lens</h1><span>NVD · CVE.org · EPSS · CISA KEV · Red Hat · SUSE · Oracle · Amazon · AlmaLinux · Rocky · Azure Linux · Ubuntu · OSV · PoC-in-GitHub, on one page</span></div>
     <form id="f">
-      <input id="q" type="search" placeholder="CVE-2024-3094, or paste any text containing a CVE id" autocomplete="off" autofocus>
+      <input id="q" type="search" placeholder="CVE-2024-3094, several separated by commas, or any text containing CVE ids" autocomplete="off" autofocus>
       <button>Search</button>
     </form>
     <div class="hint" id="hint"></div>
@@ -146,6 +147,7 @@ button.ghost:hover { border-color: var(--accent); }
 </div>
 <script>
 const CVE_RE = /CVE-\d{4}-\d{4,7}/i
+const cveIds = (raw) => [...new Set((String(raw || '').match(new RegExp(CVE_RE.source, 'gi')) || []).map((x) => x.toUpperCase()))]
 const $ = (s) => document.querySelector(s)
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 const safeUrl = (u) => /^https?:\/\//i.test(u || '') ? u : null
@@ -267,7 +269,18 @@ function cvss3Score(vector) {
 }
 const num = (v) => (v == null || v === '' || isNaN(+v) ? null : +v)
 
+// NVD allows 5 requests per 30 s without an API key; a list of CVEs queues here instead of getting rate limited
+const nvdCalls = []
+async function nvdSlot() {
+  for (;;) {
+    const now = Date.now()
+    while (nvdCalls.length && now - nvdCalls[0] > 31e3) nvdCalls.shift()
+    if (nvdCalls.length < 5) { nvdCalls.push(now); return }
+    await new Promise((ok) => setTimeout(ok, 31e3 - (now - nvdCalls[0])))
+  }
+}
 async function srcNvd(id) {
+  await nvdSlot()
   const d = await getJson(`https://services.nvd.nist.gov/rest/json/cves/2.0?cveId=${id}`)
   const c = d.vulnerabilities?.[0]?.cve
   if (!c) throw new NotFound(id)
@@ -565,11 +578,12 @@ async function srcPoc(id) {
 const SOURCES = { nvd: srcNvd, cveorg: srcCveorg, epss: srcEpss, kev: srcKev, redhat: srcRedhat, suse: srcSuse, oracle: srcOracle, amazon: srcAmazon, alma: srcAlma, rocky: srcRocky, azure: srcAzure, ubuntu: srcUbuntu, osv: srcOsv, poc: srcPoc }
 const LABEL = { nvd: 'NVD', cveorg: 'CVE.org', epss: 'EPSS', kev: 'KEV', redhat: 'Red Hat', suse: 'SUSE', oracle: 'Oracle Linux', amazon: 'Amazon Linux', alma: 'AlmaLinux', rocky: 'Rocky Linux', azure: 'Azure Linux', ubuntu: 'Ubuntu', osv: 'OSV', poc: 'PoC-in-GitHub' }
 const memo = new Map() // complete answers, for back/forward and repeat searches
-async function lookup(id, onProgress = () => {}, fresh = false) {
-  const hit = memo.get(id)
-  if (!fresh && hit && Date.now() - hit.t < 30 * 60e3) return hit.d
+async function lookup(id, onProgress = () => {}, fresh = false, keys = null) { // keys: only these sources (the multi-CVE table)
+  const fresher = (x) => x && Date.now() - x.t < 30 * 60e3 && x
+  const hit = fresher(memo.get(id)) || (keys && fresher(memo.get(id + '|summary')))
+  if (!fresh && hit) return hit.d
   const run = {} // source name -> promise, so a source can build on the others (Oracle does)
-  for (const [k, fn] of Object.entries(SOURCES)) run[k] = Promise.resolve().then(() => fn(id, run)) // deferred: every key exists before any source starts
+  for (const [k, fn] of Object.entries(SOURCES)) if (!keys || keys.includes(k)) run[k] = Promise.resolve().then(() => fn(id, run)) // deferred: every key exists before any source starts
   const entries = await Promise.all(Object.entries(run).map(async ([k, p]) => {
     let res
     try { res = [k, { ok: true, data: await p }] }
@@ -578,7 +592,7 @@ async function lookup(id, onProgress = () => {}, fresh = false) {
     return res
   }))
   const d = { id, fetched_at: new Date().toISOString().slice(0, 19) + 'Z', cached: false, sources: Object.fromEntries(entries) }
-  if (entries.every(([, r]) => r.ok)) memo.set(id, { t: Date.now(), d: { ...d, cached: true } })
+  if (entries.every(([, r]) => r.ok)) memo.set(keys ? id + '|summary' : id, { t: Date.now(), d: { ...d, cached: true } })
   return d
 }
 
@@ -804,10 +818,12 @@ addEventListener('beforeprint', () => {
 })
 addEventListener('afterprint', () => { unfolded.forEach((el) => { el.open = false }); unfolded = [] })
 
+let searchGen = 0 // bumped by every search, so an older one stops drawing
 async function search(raw, push = true, fresh = false) { // fresh: skip the kept answer and ask the sources again
-  const m = String(raw || '').match(CVE_RE)
-  if (!m) { $('#out').innerHTML = '<div class="card empty">Enter a CVE id such as CVE-2024-3094.</div>'; return }
-  const id = m[0].toUpperCase()
+  const list = cveIds(raw), gen = ++searchGen
+  if (!list.length) { $('#out').innerHTML = '<div class="card empty">Enter a CVE id such as CVE-2024-3094, or several separated by commas.</div>'; return }
+  if (list.length > 1) return searchMany(list, push, fresh, gen)
+  const id = list[0]
   $('#q').value = id
   if (push && new URLSearchParams(location.search).get('q') !== id) history.pushState({}, '', '?q=' + id)
   document.title = id + ' · CVE Lens'
@@ -823,7 +839,7 @@ async function search(raw, push = true, fresh = false) { // fresh: skip the kept
   }
   try {
     const d = await lookup(id, progress, fresh)
-    if ($('#q').value.toUpperCase() !== id) return // a newer search started
+    if (gen !== searchGen) return // a newer search started
     render(d)
     recent(id)
   } catch (e) {
@@ -831,18 +847,127 @@ async function search(raw, push = true, fresh = false) { // fresh: skip the kept
   }
 }
 
+// several CVEs: one summary row each, from the quick sources only. Click a CVE for its full page.
+const MAX_MULTI = 50
+const SUMMARY_SOURCES = ['nvd', 'cveorg', 'epss', 'kev', 'redhat', 'poc']
+async function searchMany(list, push, fresh, gen) {
+  const extra = list.length - MAX_MULTI
+  list = list.slice(0, MAX_MULTI)
+  $('#q').value = list.join(', ')
+  if (push && new URLSearchParams(location.search).get('q') !== list.join(',')) history.pushState({}, '', '?q=' + list.join(','))
+  document.title = `${list.length} CVEs · CVE Lens`
+  const cols = [['id', 'CVE'], ['pkg', 'Package'], ['sum', 'Summary'], ['cvss', 'CVSS'], ['rating', 'Rating'], ['epss', 'EPSS'], ['kev', 'CISA KEV'], ['poc', 'Exploit code'], ['pub', 'Published']]
+  const rows = list.map((id, i) => ({ id, i, cells: null, sort: {}, csv: { CVE: id } }))
+  let sortKey = null, sortDir = 1, done = 0
+  $('#out').innerHTML = `<section class="card"><div class="title"><span class="meta" id="mstat"></span>
+    <button class="ghost" id="csv" type="button" title="Download the table, in its current order, as a CSV file">Export CSV</button>
+    <button class="ghost" id="pdf" type="button" style="margin-left:0" title="Opens the print dialog: choose Save as PDF">Export PDF</button></div>
+    ${extra > 0 ? `<div class="meta">Only the first ${MAX_MULTI} are looked up; ${extra} more were left out.</div>` : ''}
+    <div class="scroll" style="margin-top:10px"><table id="multi"><thead><tr>${cols.map(([k, t]) => `<th class="sortable nowrap" data-k="${k}">${esc(t)}<span></span></th>`).join('')}</tr></thead><tbody></tbody></table></div>
+    <div class="meta">Summary from NVD, CVE.org, EPSS, CISA KEV, Red Hat and PoC-in-GitHub. Click a CVE for the full page with every source. NVD allows 5 lookups per 30 seconds, so long lists fill in slowly. Click a column heading to sort.</div></section>`
+  $('#pdf').addEventListener('click', () => print())
+  const sorted = () => {
+    const order = [...rows]
+    if (sortKey) order.sort((a, b) => {
+      const x = a.sort[sortKey], y = b.sort[sortKey]
+      if (x == null || y == null) return (x == null) - (y == null) || a.i - b.i // missing values last
+      return (x < y ? -1 : x > y ? 1 : 0) * sortDir || a.i - b.i
+    })
+    return order
+  }
+  $('#csv').addEventListener('click', () => {
+    const head = ['CVE', 'Package', 'Summary', 'CVSS', 'CVSS version', 'Rating', 'Vector', 'CVSS source', 'EPSS', 'EPSS percentile',
+      'CISA KEV', 'Ransomware', 'Exploit repos', 'Published', 'Errors']
+    // quote every field; a leading = + - @ gets an apostrophe so a spreadsheet does not run it as a formula
+    const cell = (v) => { let t = String(v ?? ''); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"' }
+    const csv = [head, ...sorted().map((r) => head.map((h) => r.csv[h]))].map((line) => line.map(cell).join(',')).join('\r\n')
+    const a = Object.assign(document.createElement('a'), {
+      href: URL.createObjectURL(new Blob(['\ufeff' + csv + '\r\n'], { type: 'text/csv;charset=utf-8' })), // BOM: Excel then reads UTF-8
+      download: `cve-lens-${new Date().toISOString().slice(0, 10)}.csv` })
+    document.body.append(a)
+    a.click()
+    a.remove()
+    setTimeout(() => URL.revokeObjectURL(a.href), 1e4)
+  })
+  const draw = () => {
+    if (gen !== searchGen) return
+    const order = sorted()
+    $('#multi tbody').innerHTML = order.map((r) => `<tr><td class="mono nowrap"><a href="?q=${esc(r.id)}" data-cve="${esc(r.id)}">${esc(r.id)}</a></td>${
+      r.cells ? r.cells.map((c) => `<td>${c}</td>`).join('') : `<td colspan="${cols.length - 1}" class="empty">looking up…</td>`}</tr>`).join('')
+    document.querySelectorAll('#multi th').forEach((th) => { th.lastChild.textContent = th.dataset.k === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : '' })
+    $('#mstat').textContent = done < rows.length ? `${done} of ${rows.length} done` : ''
+  }
+  $('#multi thead').addEventListener('click', (e) => {
+    const k = e.target.closest('th')?.dataset.k
+    if (!k) return
+    if (sortKey === k) sortDir = -sortDir
+    else { sortKey = k; sortDir = ['id', 'pkg', 'sum'].includes(k) ? 1 : -1 } // numbers and dates: highest or newest first
+    draw()
+  })
+  draw()
+  const fill = (r, d, err) => {
+    const S = d?.sources || {}, g = (k) => (S[k]?.ok ? S[k].data : null)
+    const nvd = g('nvd'), org = g('cveorg'), ep = g('epss'), kev = g('kev'), rh = g('redhat'), poc = g('poc')
+    const best = pickCvss(nvd, org, rh), pub = org?.published || nvd?.published
+    const failed = Object.entries(S).filter(([, x]) => !x.ok).map(([k, x]) => `${LABEL[k]}: ${x.error}`)
+    const text = org?.description || nvd?.description || rh?.details?.[0] || ''
+    const short = org?.title || (text.length > 180 ? text.slice(0, 180) + '…' : text)
+    // package names: Red Hat's (source RPMs, without versions or container images), else the CNA's products, else NVD's CPEs
+    const rpm = [...new Set([...(rh?.fixed || []), ...(rh?.state || [])].map((x) => (x.package || '').replace(/-\d+:.*$/, '')).filter((n) => n && !n.includes('/')))]
+    const pkgs = rpm.length ? rpm : [...new Set((org?.affected?.length ? org.affected : nvd?.cpes || []).map((a) => a.product).filter((n) => n && n !== 'n/a'))]
+    // rating word: from the chosen CVSS score, else the CNA's own word, else Red Hat's
+    const rating = (best ? best.severity || band(best.score) : (org?.metrics || []).find((m) => m.rating)?.rating || rh?.severity || '').toUpperCase()
+    const rank = { CRITICAL: 5, HIGH: 4, IMPORTANT: 4, MEDIUM: 3, MODERATE: 3, LOW: 2, NONE: 1 }[rating] ?? null
+    const why = (k) => S[k]?.ok ? '' : ` title="${esc(S[k]?.error || err || '')}"`
+    r.cells = [
+      pkgs.length ? `<span class="mono">${esc(pkgs.slice(0, 3).join(', '))}</span>${pkgs.length > 3 ? ` <span class="empty nowrap" title="${esc(pkgs.slice(3).join(', '))}">+${pkgs.length - 3} more</span>` : ''}` : '<span class="empty">n/a</span>',
+      err ? `<span class="bad">Lookup failed: ${esc(err)}</span>`
+        : `${short ? `<span title="${esc(text)}">${esc(short)}</span>` : `<span class="empty">${nvd || org || rh ? 'no description' : 'No record found in NVD, CVE.org or Red Hat'}</span>`}${
+          failed.length ? `<div class="bad" style="font-size:12px">✕ ${esc(failed.join('; '))}</div>` : ''}`,
+      `<span class="nowrap"${why('nvd')}>${chip(best?.score, best?.severity)} <span class="empty">${esc(best ? best.version : '')}</span></span>`,
+      rating ? `<span class="nowrap">${esc(rating)}</span>${best ? '' : ` <span class="empty">${esc(rh?.severity && rating === rh.severity.toUpperCase() ? 'Red Hat' : 'CNA')}</span>`}` : '<span class="empty">n/a</span>',
+      ep ? `<span class="nowrap">${pct(ep.epss)}</span> <span class="empty nowrap">${pct(ep.percentile)} percentile</span>` : `<span class="empty"${why('epss')}>n/a</span>`,
+      kev ? (kev.listed ? `<b class="nowrap" style="color:var(--kev)">⚠ Exploited</b>${kev.ransomware ? ' <span class="bad nowrap">ransomware</span>' : ''}` : '<span class="ok">not listed</span>') : `<span class="empty"${why('kev')}>n/a</span>`,
+      poc?.total ? `${poc.total} ${poc.total === 1 ? 'repo' : 'repos'}` : `<span class="empty"${why('poc')}>${S.poc?.ok ? 'none listed' : 'n/a'}</span>`,
+      `<span class="nowrap">${date(pub)}</span>`]
+    r.sort = { id: r.id, pkg: pkgs[0]?.toLowerCase() || null, sum: short.toLowerCase() || null, cvss: best?.score ?? null, rating: rank, epss: ep?.epss ?? null,
+      kev: kev ? (kev.listed ? 1 : 0) : null, poc: S.poc?.ok ? poc?.total || 0 : null, pub: pub || null }
+    r.csv = { CVE: r.id, Package: pkgs.join('; '), Summary: org?.title || text, CVSS: best?.score?.toFixed(1), 'CVSS version': best?.version, Rating: rating,
+      Vector: best?.vector, 'CVSS source': best?.source, EPSS: ep?.epss, 'EPSS percentile': ep?.percentile,
+      'CISA KEV': kev ? (kev.listed ? 'yes' : 'no') : '', Ransomware: kev?.listed ? (kev.ransomware ? 'yes' : 'no') : '',
+      'Exploit repos': S.poc?.ok ? poc?.total || 0 : '', Published: date(pub), Errors: err || failed.join('; ') }
+  }
+  let next = 0
+  const worker = async () => {
+    while (next < rows.length && gen === searchGen) {
+      const r = rows[next++]
+      try { fill(r, await lookup(r.id, undefined, fresh, SUMMARY_SOURCES)) } catch (e) { fill(r, null, e.message || String(e)) }
+      done++
+      draw()
+    }
+  }
+  await Promise.all(Array.from({ length: 4 }, worker))
+}
+$('#out').addEventListener('click', (e) => { // a CVE link in the table opens its full page here
+  const a = e.target.closest('a[data-cve]')
+  if (!a || e.button || e.ctrlKey || e.metaKey || e.shiftKey) return
+  e.preventDefault()
+  search(a.dataset.cve)
+})
+
 $('#f').addEventListener('submit', (e) => { e.preventDefault(); search($('#q').value, true, true) }) // the Search button always re-queries
 $('#q').addEventListener('paste', (e) => {
   const t = e.clipboardData?.getData('text') || ''
-  const m = t.match(CVE_RE)
-  if (m && t.trim().length > m[0].length) { e.preventDefault(); search(m[0]) }
+  const ids = cveIds(t)
+  if (ids.length > 1) { e.preventDefault(); search(ids.join(', ')) } // a list: the summary table
+  else if (ids.length && t.trim().length > ids[0].length) { e.preventDefault(); search(ids[0]) }
 })
 $('#hint').addEventListener('click', (e) => { const c = e.target.dataset?.cve; if (c) { e.preventDefault(); search(c) } })
-addEventListener('popstate', () => { const m = (new URLSearchParams(location.search).get('q') || '').match(CVE_RE); if (m) search(m[0], false); else $('#out').innerHTML = '' })
+addEventListener('popstate', () => { const q = new URLSearchParams(location.search).get('q') || ''; if (cveIds(q).length) search(q, false); else $('#out').innerHTML = '' })
 addEventListener('keydown', (e) => { if (e.key === '/' && document.activeElement !== $('#q')) { e.preventDefault(); $('#q').select() } })
 recent()
-const start = location.pathname.match(CVE_RE) || new URLSearchParams(location.search).get('q')?.match(CVE_RE)
-if (start) search(start[0], false)
+const start = new URLSearchParams(location.search).get('q') || location.pathname.match(CVE_RE)?.[0]
+if (cveIds(start).length) search(start, false)
 </script>
 </body>
 </html>
